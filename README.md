@@ -27,12 +27,12 @@ dsh plugin --profile web add github:lsjspl/dsh-plugin-grok2api-media-tool   # �
 
 插件配置保存在 `~/.dsh/settings.yaml` 的 `grok2api-media-tool:` 节，以下三种方式任选其一，效果相同，保存后即时生效（无需重启）。
 
-### 方式 1：直接对话配置（推荐）
+### 方式 1：直接对话配置
 
 在对话里直接提出即可，模型会调用 `configure_grok2api` 工具写入并生效：
 
-- 「把 grok2api 地址配成 http://192.168.1.100:8000，密钥 sk-xxx」
 - 「grok2api 复用 llm-pi-ai 里配好的 grok 提供商」
+- 「把 grok2api 地址配成 http://192.168.1.100:8000，密钥 sk-xxx」
 - 「生成的图片不要保存到工作区」
 
 ### 方式 2：复用已配置的 LLM 提供商
