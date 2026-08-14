@@ -1,0 +1,49 @@
+{
+  "name": "dsh-plugin-grok2api-media-tool",
+  "version": "0.7.3",
+  "description": "dsh bundle plugin: grok2api image & video generation tools (generate_image / generate_video) for the DeepSeek Harness",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lsjspl/dsh-plugin-grok2api-media-tool.git"
+  },
+  "homepage": "https://github.com/lsjspl/dsh-plugin-grok2api-media-tool#readme",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "api.js",
+    "media.js",
+    "media-proxy.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "DISTRIBUTE.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.18.0"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  }
+}

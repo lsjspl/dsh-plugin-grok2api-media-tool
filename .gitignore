@@ -1,0 +1,16 @@
+# Local reference checkouts (deepseek-harness, grok2api) — never distributed.
+.ref/
+
+# Test scratch: smoke workspaces and throwaway $DSH_HOME directories.
+.tmp
+
+# pnpm pack output.
+dist
+
+# Resolved through $DSH_HOME/profiles/node_modules; never committed.
+node_modules
+
+# Editor / OS noise.
+.DS_Store
+Thumbs.db
+*.log

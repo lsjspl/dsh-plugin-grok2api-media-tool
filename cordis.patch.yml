@@ -1,0 +1,22 @@
+# dsh-plugin-grok2api-media-tool bundle patch layer.
+#
+# This file is what makes the plugin mount at all: `dsh plugin add` reads the
+# package's `dsh.bundle.patch` pointer to decide the package joins
+# `dsh.profile.bundles`, and the profile loader then applies the row below to
+# create the loader entry. Removing it turns the package into an inert library.
+#
+# The layer is applied after every bundle listed before it in
+# dsh.profile.bundles and before the profile's own cordis.patch.yml.
+#
+# No `config` is set here on purpose: every field already has a schema default
+# (baseUrl http://127.0.0.1:8000, apiFlavor chenyme, …), and this file lives
+# INSIDE the installed package — an edit here is overwritten by the next
+# `dsh plugin update`. Configure the plugin in one of these instead:
+#
+#   * in chat: "把 grok2api 地址配成 …，密钥 …" (the configure_grok2api tool),
+#   * $DSH_HOME/settings.yaml, `grok2api-media-tool:` section (hot-reloaded, no restart),
+#   * the profile's own cordis.patch.yml, by targeting `id: grok2api-media-tool` — note a
+#     patch REPLACES the row's whole config rather than merging into it.
+- insert:
+    - id: grok2api-media-tool
+      name: 'dsh-plugin-grok2api-media-tool'
