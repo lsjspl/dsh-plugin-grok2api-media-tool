@@ -1,6 +1,6 @@
 # [dsh-plugin-grok2api-media-tool](https://github.com/lsjspl/dsh-plugin-grok2api-media-tool)
 
-一个 [dsh（DeepSeek Harness）](https://github.com/deepseek-ai/deepseek-harness) 插件，让智能体通过 [grok2api](https://github.com/chenyme/grok2api) 生成图片和视频。当用户提出「画一张图」「做一个视频」等需求时，模型会调用插件提供的工具并返回可查看的结果。
+一个 [dsh（DeepSeek Harness）](https://github.com/deepseek-ai/deepseek-harness) 插件，让智能体通过 [grok2api](https://github.com/chenyme/grok2api) 生成图片/视频，并用 Grok 最新语言模型识别图片。当用户提出「画一张图」「做一个视频」「分析这张图片」等需求时，模型会调用插件提供的工具并返回可查看的结果。
 
 ## 功能
 
@@ -8,6 +8,9 @@
 |---|---|
 | `generate_image` | 文生图：返回图片 URL，并可将图片保存到当前会话工作区 |
 | `generate_video` | 文生视频：创建异步任务并等待完成，返回视频 URL，并可保存到工作区 |
+| `recognize_image` | 识图：把本地图片、data URL 或图片 URL 发给 Grok 最新语言模型（默认自动选最新，可配置如 `grok-4.6`），返回模型对图片的描述/回答 |
+| 图片路径上传入口 | 聊天输入框左侧的 🖼️ 按钮：选择图片后上传到 dsh 本地，并把返回的本地路径插入输入框，供模型调用 `recognize_image` |
+| 路径识图 | 模型拿到图片路径后调用 `recognize_image`，由 Grok 最新语言模型进行多模态识别 |
 
 支持两种 grok2api 后端（通过 `apiFlavor` 选择）：
 
@@ -77,6 +80,10 @@ grok2api-media-tool:
 | `video.model` | `grok-imagine-video` | 默认视频模型；留空使用后端默认 |
 | `video.timeoutMs` | `1200000` | 视频生成总超时（毫秒） |
 | `video.pollIntervalMs` | `5000` | 视频进度轮询间隔（毫秒） |
+| `vision.enabled` | `true` | 是否启用 `recognize_image` |
+| `vision.model` | `latest` | 识图默认模型；`latest` 会查询 grok2api 的 `/v1/models` 自动选最新 Grok 语言模型（同一会话只查一次，失败回退 `grok-4.6`），也可直接填具体模型 id |
+| `vision.timeoutMs` | `60000` | 识图单次请求超时（毫秒） |
+| `vision.bridgeToText` | `true` | 是否把聊天上传的图片先用 Grok 转成文字，再交给纯文本主模型（如 DeepSeek） |
 | `saveToWorkspace` | `true` | 是否将生成的媒体下载到会话工作区 |
 | `saveDir` | `generated` | 媒体保存子目录（相对工作区根） |
 | `requestTimeoutMs` | `60000` | 单次 HTTP 请求超时（毫秒） |
@@ -89,8 +96,10 @@ grok2api-media-tool:
 - 「帮我生成一张赛博朋克城市夜景图，16:9」
 - 「做一个 8 秒的视频：一只橘猫在雪地里奔跑」
 - 「生成 2 张水彩灯塔图片，保存到项目里」
+- 「分析这张图片里有什么」/「识别 `/path/to/image.png` 里是什么」
+- 点击聊天输入框左侧的 🖼️ 按钮，选择一张图片，插件会把本地路径插入输入框；发送后模型会调用 `recognize_image` 用 Grok 识别
 
-生成的图片会以内嵌卡片展示，视频可直接在对话中播放；本地保存的文件路径会以行内代码形式出现在回复里。
+生成的图片会以内嵌卡片展示，视频可直接在对话中播放；本地保存的文件路径会以行内代码形式出现在回复里。识图结果会以普通文本返回。
 
 ## 限制
 

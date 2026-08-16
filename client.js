@@ -18,11 +18,11 @@
  * `configure_grok2api` tool and `$DSH_HOME/settings.yaml` — instead of
  * rendering a form whose every save would fail.
  *
- * Consequently this bundle binds no `ctx.settingsScope`: that service's `bind()`
- * resolves `connection` and `remote` from the CALLER's context, which a plugin
- * must therefore inject. Declaring only `['slots']` keeps this entry's
- * activation independent of the transport — and a client entry that fails to
- * activate takes the whole web boot down with it.
+ * Consequently this bundle binds no `ctx.settingsScope` and no `conversation`
+ * service: the composer upload entry only needs the session standard kit
+ * (`inputActions`) plus the plugin's own host upload route. The settings card
+ * remains informational because the host allowlist still does not expose this
+ * plugin's namespace to the browser.
  */
 
 ;(function () {
@@ -57,7 +57,7 @@
       function Grok2ApiCard() {
         return h('div', { style: STYLE.card },
           h('h3', { style: STYLE.title }, 'Grok2API Media Tool'),
-          h('p', { style: STYLE.hint }, '生成图片和视频（generate_image / generate_video）。'),
+          h('p', { style: STYLE.hint }, '生成图片/视频，并用 Grok 识别图片（generate_image / generate_video / recognize_image）。'),
           h('p', { style: STYLE.hint }, '本页不支持直接填写，请用以下方式配置：'),
           h('ul', { style: STYLE.list },
             h('li', null, '在对话里说「配置 grok2api」，模型会写入并立即生效'),
@@ -80,6 +80,65 @@
           ),
         )
       }
+
+      const UPLOAD_BUTTON_STYLE = {
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: '28px', height: '28px', padding: 0, border: 'none', borderRadius: '8px',
+        background: 'transparent', color: 'var(--dsw-alias-label-secondary, #999)',
+        cursor: 'pointer', fontSize: '15px', lineHeight: 1,
+      }
+
+      /**
+       * An image-upload entry in the composer's left tool row. Instead of
+       * attaching the image (which many text-only main models reject), this
+       * uploads the picked file to the plugin's host route, gets back a local
+       * path, and inserts that path into the input draft. The agent can then
+       * call `recognize_image` with the path for Grok multimodal recognition.
+       */
+      function UploadImageButton(props) {
+        const inputRef = React.useRef(null)
+        const uploadAndInsert = async (file) => {
+          if (!file || !props.inputActions) return
+          try {
+            const response = await fetch(`/grok2api-upload?name=${encodeURIComponent(file.name)}`, {
+              method: 'POST',
+              headers: { 'content-type': file.type || 'application/octet-stream' },
+              body: file,
+            })
+            if (!response.ok) {
+              const text = await response.text().catch(() => '')
+              throw new Error(`upload failed (${response.status}): ${text}`)
+            }
+            const data = await response.json()
+            if (!data.path) throw new Error('upload response missing path')
+            const draft = props.input?.draft ?? ''
+            props.inputActions.setDraft(draft === '' ? data.path : `${draft} ${data.path}`)
+          } catch (error) {
+            console.warn('[grok2api-media-tool] upload failed:', error)
+          }
+        }
+        return h('span', { style: { display: 'inline-flex', alignItems: 'center' } },
+          h('input', {
+            ref: inputRef,
+            type: 'file',
+            accept: 'image/*',
+            style: { display: 'none' },
+            onChange: (event) => {
+              const file = event.target.files?.[0]
+              if (file) uploadAndInsert(file)
+              event.target.value = ''
+            },
+          }),
+          h('button', {
+            type: 'button',
+            title: '上传图片并插入路径',
+            'aria-label': '上传图片并插入路径',
+            style: UPLOAD_BUTTON_STYLE,
+            onClick: () => inputRef.current?.click(),
+          }, '🖼️'),
+        )
+      }
+
 
       /** Media urls a settled tool result carries, preferring the host-computed meta. */
       function extractUrls(block) {
@@ -142,6 +201,16 @@
           order: 30,
           label: 'Grok2API Media Tool',
         }, Grok2ApiCard))
+
+        // A visible image-upload entry in the composer's left tool row. The
+        // slot is session-scoped, so the component receives `inputActions` from
+        // the session standard kit. Picking a file uploads it to the plugin's
+        // host route and inserts the returned local path into the draft.
+        ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+          name: 'conversation.input.left',
+          id: 'grok2api-upload',
+          order: 30,
+        }, UploadImageButton))
 
         // Embedded media cards: the video plays and the images render inside
         // the tool-result card. The url is a same-origin route on dsh's own

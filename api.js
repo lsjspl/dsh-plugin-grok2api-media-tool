@@ -94,6 +94,23 @@ export async function request(cfg, path, init, signal) {
 }
 
 /**
+ * List model ids advertised by the grok2api endpoint (OpenAI-compatible
+ * `GET /v1/models`). Tolerant callers use this to pick the newest Grok chat
+ * model automatically; a backend that does not implement it answers an empty
+ * list, not a hard failure.
+ * @param {object} cfg - normalized plugin config (`baseUrl`, `apiKey`, `requestTimeoutMs`).
+ * @param {AbortSignal} signal - caller-owned signal.
+ * @returns {Promise<string[]>} model ids, in endpoint order.
+ */
+export async function listModels(cfg, signal) {
+  const payload = await request(cfg, '/v1/models', { method: 'GET' }, signal)
+  return Array.isArray(payload?.data)
+    ? payload.data.map((entry) => typeof entry?.id === 'string' ? entry.id : '').filter((id) => id.length > 0)
+    : []
+}
+
+
+/**
  * Parse an OpenAI-style image generation response into `{ url?, b64? }` items.
  * Accepts `data: [{ url | b64_json }]` and a bare `{ url }` as fallback.
  */
@@ -170,6 +187,52 @@ export async function createImage(cfg, input, signal) {
     ...(item.url !== undefined ? { url: rewriteMediaUrl(item.url, cfg) } : {}),
   }))
 }
+
+/**
+ * Call the OpenAI-compatible chat completions endpoint with one image.
+ *
+ * @param {object} cfg - normalized plugin config (`baseUrl`, `apiKey`, `requestTimeoutMs`).
+ * @param {{ image: string, prompt: string, model: string, maxTokens?: number }} input
+ *   `image` is a data URL (preferred for local files), an http(s) URL, or any
+ *   value the backend accepts as an OpenAI image_url.
+ * @param {AbortSignal} signal - caller-owned signal.
+ * @returns {Promise<{ text: string, model: string, usage?: object }>}
+ * @throws {Error} when the response carries no usable assistant text.
+ */
+export async function createChatCompletion(cfg, input, signal) {
+  const body = {
+    model: input.model,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: input.prompt },
+        { type: 'image_url', image_url: { url: input.image } },
+      ],
+    }],
+  }
+  if (input.maxTokens !== undefined) body.max_tokens = input.maxTokens
+  const payload = await request(cfg, '/v1/chat/completions', { method: 'POST', body: JSON.stringify(body) }, signal)
+  const content = payload?.choices?.[0]?.message?.content
+  let text = ''
+  if (typeof content === 'string') text = content
+  else if (Array.isArray(content)) {
+    text = content
+      .filter((part) => part && typeof part === 'object' && typeof part.text === 'string')
+      .map((part) => part.text)
+      .join('')
+  }
+  if (text.trim().length === 0) {
+    const raw = payload?.error?.message ?? payload?.message ?? payload?.detail
+      ?? (payload ? truncate(JSON.stringify(payload), 500) : 'empty response')
+    throw new Error(`grok2api chat completion returned no text: ${truncate(raw, 400)}`)
+  }
+  return {
+    text,
+    model: typeof payload?.model === 'string' && payload.model.length > 0 ? payload.model : input.model,
+    ...(payload?.usage && typeof payload.usage === 'object' ? { usage: payload.usage } : {}),
+  }
+}
+
 
 /**
  * Create an asynchronous video job and poll it to completion.

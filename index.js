@@ -1,13 +1,15 @@
 /**
- * dsh-plugin-grok2api-media-tool: model-facing image & video generation tools over a
- * grok2api deployment (github.com/chenyme/grok2api or the legacy
- * aurora-develop/grok2api backend).
+ * dsh-plugin-grok2api-media-tool: model-facing image/video generation and image
+ * recognition tools over a grok2api deployment (github.com/chenyme/grok2api or
+ * the legacy aurora-develop/grok2api backend).
  *
- * Registers three tools on the host tool registry:
+ * Registers four tools on the host tool registry:
  * - `generate_image`: POST /v1/images/generations, returns urls and optional
  *   local workspace copies.
  * - `generate_video`: asynchronous job; creates, polls to completion, and
  *   returns the video url with an optional local workspace copy.
+ * - `recognize_image`: POST /v1/chat/completions with an image, returning the
+ *   Grok model's text answer (default model: latest advertised Grok chat model).
  * - `configure_grok2api`: edits the plugin's `grok2api-media-tool:` section in
  *   `$DSH_HOME/settings.yaml` and re-applies it live — the model-facing
  *   configuration channel, and the one a UI cannot replace here (dsh's
@@ -32,17 +34,23 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
-import { createAndPollVideo, createImage, FLAVOR_MODELS, FLAVORS } from './api.js'
-import { assertSafeSaveDir, decodeB64, downloadBytes, saveMedia } from './media.js'
-import { createMediaHandler, loadMediaKey, localMediaUrl, MEDIA_ROUTE_PATH } from './media-proxy.js'
+import { createAndPollVideo, createChatCompletion, createImage, FLAVOR_MODELS, FLAVORS, listModels } from './api.js'
+import { assertSafeSaveDir, decodeB64, downloadBytes, imageDataUrlForInput, saveMedia } from './media.js'
+import { createMediaHandler, createUploadHandler, loadMediaKey, localMediaUrl, MEDIA_ROUTE_PATH, UPLOAD_ROUTE_PATH } from './media-proxy.js'
 
 export const name = 'grok2api-media-tool'
 
-export const inject = ['tools', 'systemPrompt']
+export const inject = ['tools', 'systemPrompt', 'agents']
 
 const IMAGE_ASPECT_RATIOS = ['auto', '1:1', '16:9', '9:16', '4:3', '3:4']
 const IMAGE_QUALITIES = ['low', 'medium']
 const VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1']
+const VISION_MODEL_DEFAULT = 'latest'
+const VISION_MODEL_FALLBACK = 'grok-4.6'
+/** One `/v1/models` lookup per config + session; avoids a network round-trip on every recognize_image call. */
+const visionModelCache = new Map()
+/** Agents already wired with the image bridge, so HMR/reload never double-registers. */
+const bridgedAgents = new WeakSet()
 
 /**
  * Settings namespace this plugin owns in `$DSH_HOME/settings.yaml`. Registering
@@ -76,13 +84,19 @@ export const Config = z.object({
     timeoutMs: z.number().description('generate_video overall timeout (creation + polling + download).').default(1200000),
     pollIntervalMs: z.number().description('Video status polling interval in milliseconds.').default(5000),
   }).default({ enabled: true, model: '', timeoutMs: 1200000, pollIntervalMs: 5000 }),
+  vision: z.object({
+    enabled: z.boolean().description('Register the recognize_image tool.').default(true),
+    model: z.string().description('Default Grok vision model for image recognition.').default(VISION_MODEL_DEFAULT),
+    timeoutMs: z.number().description('recognize_image overall timeout in milliseconds.').default(60000),
+    bridgeToText: z.boolean().description('Convert uploaded images to Grok text before sending to a text-only main model.').default(true),
+  }).default({ enabled: true, model: VISION_MODEL_DEFAULT, timeoutMs: 60000, bridgeToText: true }),
   saveToWorkspace: z.boolean().description('Download generated media into the session workspace.').default(true),
   saveDir: z.string().description('Workspace subdirectory for saved media; must stay relative.').default('generated'),
   requestTimeoutMs: z.number().description('Per-HTTP-request timeout in milliseconds.').default(60000),
   mediaDownloadTimeoutMs: z.number().description('Timeout for one media download (videos are large).').default(300000),
 })
 
-const PROMPT_SECTION = 'Use the generate_image tool when the user asks to create, draw, or generate an image, and the generate_video tool when the user asks to create a video or animation. After a successful call, show images with markdown image syntax using the returned url (the media route is public), and list saved local file paths in your reply as inline code exactly as returned. Give video urls as markdown links. When the grok2api connection settings (API address, key, backend flavor) are missing or wrong, use the configure_grok2api tool to set or fix them, then retry.'
+const PROMPT_SECTION = 'Use the generate_image tool when the user asks to create, draw, or generate an image, and the generate_video tool when the user asks to create a video or animation. After a successful call, show images with markdown image syntax using the returned url (the media route is public), and list saved local file paths in your reply as inline code exactly as returned. Give video urls as markdown links. When the user asks to identify, describe, read, or otherwise understand an image, use the recognize_image tool. When the grok2api connection settings (API address, key, backend flavor) are missing or wrong, use the configure_grok2api tool to set or fix them, then retry.'
 
 /** The harness home directory: `$DSH_HOME`, else `~/.dsh`. */
 export function dshHome() {
@@ -155,12 +169,16 @@ export function normalizeConfig(raw) {
 
   const image = { ...(input.image ?? {}) }
   const video = { ...(input.video ?? {}) }
+  const vision = { ...(input.vision ?? {}) }
   image.timeoutMs = image.timeoutMs ?? 180000
   video.timeoutMs = video.timeoutMs ?? 1200000
   video.pollIntervalMs = video.pollIntervalMs ?? 5000
+  vision.timeoutMs = vision.timeoutMs ?? 60000
+  vision.bridgeToText = vision.bridgeToText === undefined ? true : vision.bridgeToText
   positiveInteger(image.timeoutMs, 'image.timeoutMs')
   positiveInteger(video.timeoutMs, 'video.timeoutMs')
   positiveInteger(video.pollIntervalMs, 'video.pollIntervalMs')
+  positiveInteger(vision.timeoutMs, 'vision.timeoutMs')
   positiveInteger(requestTimeoutMs(input), 'requestTimeoutMs')
   positiveInteger(mediaDownloadTimeoutMs(input), 'mediaDownloadTimeoutMs')
 
@@ -187,6 +205,12 @@ export function normalizeConfig(raw) {
       model: stringOrEmpty(video.model, 'video.model') || FLAVOR_MODELS[apiFlavor].video,
       timeoutMs: video.timeoutMs,
       pollIntervalMs: video.pollIntervalMs,
+    },
+    vision: {
+      enabled: vision.enabled === undefined ? true : vision.enabled,
+      model: stringOrEmpty(vision.model, 'vision.model') || VISION_MODEL_DEFAULT,
+      timeoutMs: vision.timeoutMs,
+      bridgeToText: vision.bridgeToText,
     },
     saveToWorkspace: input.saveToWorkspace === undefined ? true : input.saveToWorkspace,
     saveDir,
@@ -222,9 +246,9 @@ export function readUserSection(path = settingsFilePath()) {
 /**
  * Reuse facts from a provider configured under the `llm-pi-ai:` settings
  * section: its base URL (the `v1` chat suffix stripped), credential reference,
- * and grok image/video model ids when the provider catalog lists them.
+ * and grok image/video/vision model ids when the provider catalog lists them.
  * @param {string} providerName - key in `llm-pi-ai.providers`, e.g. 'grok'.
- * @returns {{ baseUrl?: string, apiKeyEnv?: string, imageModel?: string, videoModel?: string }} resolved facts.
+ * @returns {{ baseUrl?: string, apiKeyEnv?: string, imageModel?: string, videoModel?: string, visionModel?: string }} resolved facts.
  */
 export function resolveProviderFacts(providerName, path = settingsFilePath()) {
   const provider = readSettingsDocument(path)['llm-pi-ai']?.providers?.[providerName]
@@ -242,11 +266,21 @@ export function resolveProviderFacts(providerName, path = settingsFilePath()) {
   // a bare "imagine-image" substring would otherwise match whichever entry
   // appears first (base, -quality, or -lite).
   const imageModel = idOf('imagine-image-quality') ?? idOf('imagine-image')
+  // Pick the newest Grok chat model from the provider catalog for image
+  // recognition, skipping generation-only ids (imagine/video).
+  const chatModelIds = models
+    .map((model) => typeof model?.id === 'string' ? model.id : '')
+    .filter((id) => id.length > 0 && !/imagine|video/i.test(id))
+  const visionModel = chatModelIds.find((id) => /grok-4[.-]6/i.test(id))
+    ?? chatModelIds.find((id) => /grok-4/i.test(id))
+    ?? chatModelIds.find((id) => /grok-3/i.test(id))
+    ?? chatModelIds[0]
   return {
     ...(baseUrl !== undefined ? { baseUrl } : {}),
     ...(typeof provider.apiKeyEnv === 'string' && provider.apiKeyEnv.length > 0 ? { apiKeyEnv: provider.apiKeyEnv } : {}),
     ...(imageModel !== undefined ? { imageModel } : {}),
     ...(idOf('imagine-video') !== undefined ? { videoModel: idOf('imagine-video') } : {}),
+    ...(visionModel !== undefined ? { visionModel } : {}),
   }
 }
 
@@ -496,6 +530,151 @@ function videoTool(cfg) {
   }
 }
 
+function presentVisionCall(args) {
+  return { card: 'generic', title: `Recognize image: ${args.prompt}`, rawInput: args.prompt }
+}
+
+function presentVisionResult(_args, result) {
+  if (result.isError) return undefined
+  const text = typeof result.meta?.text === 'string' ? result.meta.text : undefined
+  return {
+    card: 'generic',
+    title: 'Recognized image',
+    content: textContent(text ?? 'Image recognized'),
+  }
+}
+
+
+/**
+ * Resolve the vision model to actually use. `latest` (or an empty value) asks
+ * grok2api for `/v1/models` and picks the newest Grok chat model it advertises;
+ * on any listing failure it falls back to {@link VISION_MODEL_FALLBACK}.
+ *
+ * The lookup is cached per `baseUrl + apiKey + session` so a session does not
+ * hit `/v1/models` on every recognize_image call. A settings-provided provider
+ * usually resolves to a concrete `cfg.vision.model` already, in which case this
+ * function is never invoked.
+ * @param {object} cfg - normalized plugin config.
+ * @param {AbortSignal} signal - caller-owned signal.
+ * @param {string} [sessionKey] - session-scoped cache key; defaults to `'default'`.
+ * @returns {Promise<string>} a concrete model id.
+ */
+async function resolveLatestVisionModel(cfg, signal, sessionKey = 'default') {
+  const cacheKey = `${cfg.baseUrl}|${cfg.apiKey ? 'set' : 'unset'}|${sessionKey}`
+  const cached = visionModelCache.get(cacheKey)
+  if (cached !== undefined) return cached
+  let model = VISION_MODEL_FALLBACK
+  try {
+    const models = await listModels(cfg, signal)
+    const chatModelIds = models.filter((id) => !/imagine|video/i.test(id))
+    const picked = chatModelIds.find((id) => /grok-4[.-]6/i.test(id))
+      ?? chatModelIds.find((id) => /grok-4/i.test(id))
+      ?? chatModelIds.find((id) => /grok-3/i.test(id))
+      ?? chatModelIds[0]
+    model = picked ?? VISION_MODEL_FALLBACK
+  } catch {
+    model = VISION_MODEL_FALLBACK
+  }
+  visionModelCache.set(cacheKey, model)
+  return model
+}
+
+/**
+ * The model-facing image-recognition tool: sends one image to a Grok chat
+ * model through grok2api and returns its text answer. Local files are read and
+ * uploaded as data URLs; media-route URLs are resolved back to the local file
+ * they sign so the backend never needs to reach the dsh web server.
+ */
+function visionTool(cfg) {
+  return {
+    name: 'recognize_image',
+    description: 'Analyze an image with Grok through grok2api. Provide an image (local file path, data URL, or http(s) URL) and a prompt/question; returns the model’s text answer.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['image', 'prompt'],
+      properties: {
+        image: { type: 'string', description: 'Image to analyze: an http(s) URL, a data URL, or a local file path (absolute or relative to the session workspace).' },
+        prompt: { type: 'string', description: 'Question or instruction about the image.' },
+        model: { type: 'string', description: 'Optional Grok model override; defaults to the configured vision model.' },
+        maxTokens: { type: 'integer', minimum: 1, description: 'Optional maximum number of output tokens.' },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          text: { type: 'string' },
+          model: { type: 'string' },
+        },
+      },
+      render: (_args, value) => [{ type: 'text', text: value.text }],
+      presentationMeta: (_args, value) => ({ text: value.text, model: value.model }),
+    },
+    timeoutMs: cfg.vision.timeoutMs,
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const image = typeof args.image === 'string' ? args.image.trim() : ''
+      const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : ''
+      if (image.length === 0) throw new Error('image must be a non-empty URL, data URL, or local path')
+      if (prompt.length === 0) throw new Error('prompt must be a non-empty string')
+      const maxTokens = args.maxTokens === undefined ? undefined : args.maxTokens
+      if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || maxTokens < 1)) {
+        throw new Error('maxTokens must be a positive integer')
+      }
+      const requestedModel = typeof args.model === 'string' && args.model.trim() ? args.model.trim() : cfg.vision.model
+      const sessionKey = exec?.agent?.session?.id ?? 'default'
+      const model = requestedModel === 'latest' || requestedModel === ''
+        ? await resolveLatestVisionModel(cfg, exec.signal, sessionKey)
+        : requestedModel
+      const imageDataUrl = await imageDataUrlForInput(image, exec)
+      const result = await createChatCompletion(cfg, {
+        image: imageDataUrl,
+        prompt,
+        model,
+        ...(maxTokens !== undefined ? { maxTokens } : {}),
+      }, exec.signal)
+      return { text: result.text, model: result.model }
+    },
+    presentCall: presentVisionCall,
+    presentResult: presentVisionResult,
+  }
+}
+
+
+/** True when a content block list contains a top-level image block. */
+function hasImageBlocks(content) {
+  return Array.isArray(content) && content.some((block) => block && typeof block === 'object' && block.type === 'image')
+}
+
+/**
+ * Recognize one durable attachment through grok2api and return a text
+ * description suitable for a text-only main model.
+ * @param {object} cfg - normalized plugin config.
+ * @param {object} attachment - durable image attachment reference.
+ * @param {object} attachments - the host attachment service (`ctx.attachments`).
+ * @param {AbortSignal} [signal] - optional cancellation.
+ * @returns {Promise<string>} the Grok model's text answer.
+ */
+async function recognizeAttachment(cfg, attachment, attachments, signal) {
+  const stored = await attachments.readImage(attachment)
+  const bytes = Buffer.from(stored?.data ?? [])
+  const mime = stored?.ref?.mediaType ?? 'image/png'
+  const dataUrl = `data:${mime};base64,${bytes.toString('base64')}`
+  const requestedModel = cfg.vision.model
+  const model = requestedModel === 'latest' || requestedModel === ''
+    ? await resolveLatestVisionModel(cfg, signal ?? new AbortController().signal, 'image-bridge')
+    : requestedModel
+  const result = await createChatCompletion(cfg, {
+    image: dataUrl,
+    prompt: 'Describe this image in detail for a text-only language model. Include all visible text, objects, people, actions, and context.',
+    model,
+  }, signal ?? new AbortController().signal)
+  return result.text
+}
+
+
 /** Fields `configure_grok2api` accepts; every field is optional. */
 const CONFIGURE_FIELDS = {
   baseUrl: { type: 'string', description: 'grok2api HTTP(S) base URL, e.g. http://127.0.0.1:8000.' },
@@ -505,8 +684,11 @@ const CONFIGURE_FIELDS = {
   llmProvider: { type: 'string', description: 'Provider name in the llm-pi-ai providers section to reuse, e.g. grok; used when apiSource is llm-provider.' },
   imageModel: { type: 'string', description: 'Default image model; empty selects the flavor default.' },
   videoModel: { type: 'string', description: 'Default video model; empty selects the flavor default.' },
+  visionModel: { type: 'string', description: 'Default Grok vision model used by recognize_image.' },
+  visionBridgeToText: { type: 'boolean', description: 'Convert uploaded images to Grok text before sending to a text-only main model.' },
   imageEnabled: { type: 'boolean', description: 'Whether generate_image is available.' },
   videoEnabled: { type: 'boolean', description: 'Whether generate_video is available.' },
+  visionEnabled: { type: 'boolean', description: 'Whether recognize_image is available.' },
   saveToWorkspace: { type: 'boolean', description: 'Download generated media into the session workspace.' },
   saveDir: { type: 'string', description: 'Workspace subdirectory for saved media; must stay relative.' },
 }
@@ -515,7 +697,7 @@ const CONFIGURE_FIELDS = {
 function configureTool(holder) {
   return {
     name: 'configure_grok2api',
-    description: 'Read or update the grok2api connection settings for the image/video tools. Changes persist to settings.yaml and apply immediately. Call without arguments to view the current configuration.',
+    description: 'Read or update the grok2api connection settings for the image/video/vision tools. Changes persist to settings.yaml and apply immediately. Call without arguments to view the current configuration.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -553,8 +735,11 @@ function configureTool(holder) {
         else if (key === 'llmProvider') patch.llmProvider = typeof args.llmProvider === 'string' ? args.llmProvider.trim() : ''
         else if (key === 'imageModel') patch.image = { ...current.image, model: typeof args.imageModel === 'string' ? args.imageModel.trim() : '' }
         else if (key === 'videoModel') patch.video = { ...current.video, model: typeof args.videoModel === 'string' ? args.videoModel.trim() : '' }
+        else if (key === 'visionModel') patch.vision = { ...current.vision, model: typeof args.visionModel === 'string' ? args.visionModel.trim() : '' }
+        else if (key === 'visionBridgeToText') patch.vision = { ...current.vision, bridgeToText: Boolean(args.visionBridgeToText) }
         else if (key === 'imageEnabled') patch.image = { ...current.image, enabled: Boolean(args.imageEnabled) }
         else if (key === 'videoEnabled') patch.video = { ...current.video, enabled: Boolean(args.videoEnabled) }
+        else if (key === 'visionEnabled') patch.vision = { ...current.vision, enabled: Boolean(args.visionEnabled) }
         else if (key === 'saveToWorkspace') patch.saveToWorkspace = Boolean(args.saveToWorkspace)
         else if (key === 'saveDir') patch.saveDir = typeof args.saveDir === 'string' ? args.saveDir.trim() : ''
       }
@@ -583,6 +768,7 @@ function displayConfig(cfg) {
     apiKey: cfg.apiKey ? '(set)' : (cfg.apiKeyEnv ? `(from env ${cfg.apiKeyEnv})` : '(unset)'),
     image: cfg.image,
     video: cfg.video,
+    vision: cfg.vision,
     saveToWorkspace: cfg.saveToWorkspace,
     saveDir: cfg.saveDir,
   }
@@ -606,12 +792,66 @@ export function apply(ctx, config) {
 
   ctx.systemPrompt.section({ name: 'tool:grok2api-media-tool', order: 112, text: PROMPT_SECTION })
 
+  // Image bridge: when a user message carries image attachments, convert each
+  // image to a Grok-generated text description before the step reaches the main
+  // model. This lets a text-only main model (e.g. DeepSeek) still answer image
+  // questions: the uploaded image is recognized by Grok first, and DeepSeek
+  // receives only the resulting text.
+  //
+  // agent/* events are scoped to each agent, so the bridge must be registered
+  // on every agent's own context (`agent.ctx`) — a root `ctx.on` listener does
+  // not see agent-scoped waterfalls.
+  if (typeof ctx.on === 'function') {
+    const attachBridge = (agent) => {
+      if (!agent || !agent.ctx || typeof agent.ctx.on !== 'function' || bridgedAgents.has(agent)) return
+      bridgedAgents.add(agent)
+      agent.ctx.on('agent/pre-step', async (payload, next) => {
+        const decision = await next()
+        if (!decision || decision.kind !== 'enter' || !Array.isArray(decision.messages)) return decision
+        if (cfg.vision.bridgeToText === false) return decision
+        const attachments = ctx.get?.('attachments')
+        if (!attachments) return decision
+        let changed = false
+        const messages = []
+        for (const message of decision.messages) {
+          if (!message || message.role !== 'user' || !hasImageBlocks(message.content)) {
+            messages.push(message)
+            continue
+          }
+          const content = []
+          for (const block of message.content) {
+            if (block && block.type === 'image') {
+              changed = true
+              try {
+                const text = await recognizeAttachment(cfg, block.attachment, attachments, payload?.signal)
+                content.push({ type: 'text', text: `[用户上传的图片内容：${text}]` })
+              } catch (error) {
+                content.push({ type: 'text', text: `[图片识别失败：${String(error?.message ?? error)}]` })
+              }
+            } else {
+              content.push(block)
+            }
+          }
+          messages.push({ ...message, content })
+        }
+        if (!changed) return decision
+        return { ...decision, messages }
+      })
+    }
+    ctx.on('agent/created', ({ agent }) => { attachBridge(agent) })
+    const agents = ctx.get?.('agents')
+    if (agents && typeof agents.list === 'function') {
+      for (const agent of agents.list()) attachBridge(agent)
+    }
+  }
+
   const disposers = []
   const rejudge = () => {
     for (const dispose of disposers.splice(0)) dispose()
     disposers.push(ctx.tools.register(configureTool(holder)))
     if (cfg.image.enabled) disposers.push(ctx.tools.register(imageTool(cfg)))
     if (cfg.video.enabled) disposers.push(ctx.tools.register(videoTool(cfg)))
+    if (cfg.vision.enabled) disposers.push(ctx.tools.register(visionTool(cfg)))
   }
 
   // Saved media is served from dsh's own web server (see media-proxy.js): the
@@ -628,27 +868,34 @@ export function apply(ctx, config) {
   const mediaUrlFor = (filePath) => (
     mediaRouteMounted && mediaKey !== undefined ? localMediaUrl(mediaKey, filePath) : undefined
   )
-  if (mediaKey !== undefined) {
-    ctx.inject?.(['webServer'], (webCtx) => {
-      webCtx.effect(() => {
-        const dispose = webCtx.webServer.register({
+  ctx.inject?.(['webServer'], (webCtx) => {
+    webCtx.effect(() => {
+      const disposers = []
+      if (mediaKey !== undefined) {
+        disposers.push(webCtx.webServer.register({
           kind: 'prefix',
           path: MEDIA_ROUTE_PATH,
           handler: createMediaHandler(mediaKey),
-        })
+        }))
         mediaRouteMounted = true
-        return () => {
-          mediaRouteMounted = false
-          dispose()
-        }
-      })
+      }
+      // Composer upload route: stores the picked file and returns its local path.
+      disposers.push(webCtx.webServer.register({
+        kind: 'prefix',
+        path: UPLOAD_ROUTE_PATH,
+        handler: createUploadHandler(dshHome()),
+      }))
+      return () => {
+        mediaRouteMounted = false
+        for (const dispose of disposers) dispose()
+      }
     })
-  }
+  })
 
   // Rebuild cfg from the layered sources: schema defaults, then the patch-row
   // entry, then the grok2api user section, then (for apiSource=llm-provider)
   // facts derived from the named llm-pi-ai provider (baseUrl, key reference,
-  // grok image/video model ids). Re-registers tools after every rebuild.
+  // grok image/video/vision model ids). Re-registers tools after every rebuild.
   const reload = () => {
     const u = readUserSection()
     const source = u.apiSource ?? schemaEntry.apiSource
@@ -659,6 +906,7 @@ export function apply(ctx, config) {
     }
     const imageUser = u.image ?? {}
     const videoUser = u.video ?? {}
+    const visionUser = u.vision ?? {}
     const next = normalizeConfig({
       ...schemaEntry,
       ...u,
@@ -672,6 +920,11 @@ export function apply(ctx, config) {
         ...schemaEntry.video,
         ...videoUser,
         ...(facts.videoModel !== undefined && !videoUser.model ? { model: facts.videoModel } : {}),
+      },
+      vision: {
+        ...schemaEntry.vision,
+        ...visionUser,
+        ...(facts.visionModel !== undefined && !visionUser.model ? { model: facts.visionModel } : {}),
       },
       ...(u.apiKey === undefined && facts.apiKeyEnv !== undefined
         ? {

@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-grok2api-media-tool",
-  "version": "0.7.3",
-  "description": "dsh bundle plugin: grok2api image & video generation tools (generate_image / generate_video) for the DeepSeek Harness",
+  "version": "0.7.5",
+  "description": "dsh bundle plugin: grok2api image & video generation tools plus image recognition (generate_image / generate_video / recognize_image) for the DeepSeek Harness",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lsjspl/dsh-plugin-grok2api-media-tool.git"
@@ -30,7 +30,12 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "platform": "web"
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
     }
   },
   "dependencies": {

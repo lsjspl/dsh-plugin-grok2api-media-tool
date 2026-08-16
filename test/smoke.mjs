@@ -8,8 +8,8 @@ import http from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { createAndPollVideo, createImage, FLAVOR_MODELS, rewriteMediaUrl } from '../api.js'
-import { assertSafeSaveDir, decodeB64, downloadBytes, extFor, saveMedia } from '../media.js'
+import { createAndPollVideo, createChatCompletion, createImage, FLAVOR_MODELS, rewriteMediaUrl } from '../api.js'
+import { assertSafeSaveDir, decodeB64, downloadBytes, extFor, imageDataUrlForInput, saveMedia } from '../media.js'
 import { apply as applyPlugin, Config, normalizeConfig, settingsFilePath, writeUserSection } from '../index.js'
 
 /** Disposers collected from every fake effect (closed at suite teardown). */
@@ -27,6 +27,8 @@ function fakeHostCtx(options = {}) {
   const sections = []
   const state = {
     registered, disposed, sections,
+    listeners: [],
+    agentsList: [],
     registration: undefined,
     settingsValue: undefined,
     settingsWatcher: undefined,
@@ -42,7 +44,16 @@ function fakeHostCtx(options = {}) {
   state.logger = { warn: () => {} }
   // 2 = cordis FIBER_ACTIVE.
   state.fiber = { state: 2 }
-  state.get = (serviceName) => (serviceName === 'credentials' ? state.credentials : undefined)
+  state.on = (name, listener) => {
+    state.listeners.push({ name, listener })
+    return () => {}
+  }
+  state.get = (serviceName) => (
+    serviceName === 'credentials' ? state.credentials
+      : serviceName === 'attachments' ? state.attachments
+        : serviceName === 'agents' ? state.agents
+          : undefined
+  )
   state.effect = (fn) => {
     const cleanup = fn()
     const disposer = () => cleanup?.()
@@ -84,6 +95,12 @@ function fakeHostCtx(options = {}) {
   state.credentials = {
     resolve: async (ref) => (typeof ref === 'string' && ref.length > 0 ? { value: `cred-${ref}`, source: 'env' } : undefined),
   }
+  state.attachments = {
+    readImage: async (ref) => ({ data: b64PngBuffer(), ref: { mediaType: 'image/png' } }),
+  }
+  state.agents = {
+    list: () => state.agentsList,
+  }
   return state
 }
 
@@ -92,6 +109,8 @@ const b64PngBuffer = () => Buffer.from(b64Png(), 'base64')
 
 const videoPolls = new Map()
 const seenAuth = []
+const seenChat = []
+let seenModels = 0
 
 const server = http.createServer((req, res) => {
   seenAuth.push(req.headers.authorization ?? '')
@@ -103,6 +122,28 @@ const server = http.createServer((req, res) => {
     }
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ created: 1, data: [{ url: `http://127.0.0.1:${port}/img1.png` }, { b64_json: b64Png() }] }))
+    return
+  }
+  if (req.method === 'GET' && req.url === '/v1/models') {
+    seenModels += 1
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'grok-4.6' }, { id: 'grok-imagine-image' }] }))
+    return
+  }
+  if (req.method === 'POST' && req.url === '/v1/chat/completions') {
+    let body = ''
+    req.on('data', (chunk) => { body += chunk })
+    req.on('end', () => {
+      const parsed = JSON.parse(body)
+      seenChat.push(parsed)
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({
+        id: 'chatcmpl-test',
+        object: 'chat.completion',
+        model: parsed.model,
+        choices: [{ index: 0, message: { role: 'assistant', content: 'The image shows a cat.' }, finish_reason: 'stop' }],
+      }))
+    })
     return
   }
   if (req.method === 'POST' && req.url === '/v1/videos/generations') {
@@ -156,6 +197,7 @@ const cfg = {
   apiKey: 'test-key',
   image: { enabled: true, model: FLAVOR_MODELS.chenyme.image, timeoutMs: 60000 },
   video: { enabled: true, model: FLAVOR_MODELS.chenyme.video, timeoutMs: 60000, pollIntervalMs: 20 },
+  vision: { enabled: true, model: 'grok-4.6', timeoutMs: 60000 },
   saveToWorkspace: true,
   saveDir: 'generated',
   requestTimeoutMs: 10000,
@@ -192,6 +234,33 @@ await check('createImage parses url + b64 items', async () => {
   assert.equal(items[0].url, `http://127.0.0.1:${port}/img1.png`)
   assert.ok(items[1].b64)
 })
+
+await check('createChatCompletion sends image and returns text', async () => {
+  const result = await createChatCompletion(cfg, {
+    image: `data:image/png;base64,${b64Png()}`,
+    prompt: 'What is this?',
+    model: 'grok-4.6',
+  }, signal)
+  assert.equal(result.text, 'The image shows a cat.')
+  assert.equal(result.model, 'grok-4.6')
+  const body = seenChat.at(-1)
+  assert.equal(body.model, 'grok-4.6')
+  assert.equal(body.messages[0].content[1].type, 'image_url')
+  assert.equal(body.messages[0].content[1].image_url.url, `data:image/png;base64,${b64Png()}`)
+})
+
+await check('imageDataUrlForInput reads local file and media route', async () => {
+  const path = join(workspace, 'pic.png')
+  await writeFile(path, b64PngBuffer())
+  const data = await imageDataUrlForInput(path, exec)
+  assert.ok(data.startsWith('data:image/png;base64,'))
+  const mediaUrl = `/grok2api-media/${encodeURIComponent(path)}?t=x`
+  const data2 = await imageDataUrlForInput(mediaUrl, exec)
+  assert.ok(data2.startsWith('data:image/png;base64,'))
+  const remote = await imageDataUrlForInput('https://example.com/a.png', exec)
+  assert.equal(remote, 'https://example.com/a.png')
+})
+
 
 await check('downloadBytes + saveMedia write with sniffed extension', async () => {
   const { bytes, contentType } = await downloadBytes(`http://127.0.0.1:${port}/img1.png`, cfg, signal)
@@ -267,6 +336,8 @@ await check('normalizeConfig validates and defaults', () => {
   assert.equal(resolved.baseUrl, 'http://127.0.0.1:1')
   assert.equal(resolved.image.model, 'grok-imagine-image-quality')
   assert.equal(resolved.video.model, 'grok-imagine-video')
+  assert.equal(resolved.vision.model, 'latest')
+  assert.equal(resolved.vision.enabled, true)
   assert.equal(resolved.saveDir, 'generated')
   assert.equal(resolved.saveToWorkspace, true)
   assert.throws(() => normalizeConfig({}), /baseUrl is required/)
@@ -283,6 +354,8 @@ await check('Config schema fills defaults and validates types', () => {
   assert.equal(resolved.image.timeoutMs, 30000)
   assert.equal(resolved.image.enabled, true)
   assert.equal(resolved.video.timeoutMs, 1200000)
+  assert.equal(resolved.vision.model, 'latest')
+  assert.equal(resolved.vision.timeoutMs, 60000)
   assert.equal(resolved.mediaDownloadTimeoutMs, 300000)
   assert.throws(() => Config({ requestTimeoutMs: 'abc' }), /requestTimeoutMs/)
   assert.throws(() => Config({ baseUrl: 42 }), /baseUrl/)
@@ -291,7 +364,7 @@ await check('Config schema fills defaults and validates types', () => {
 await check('apply registers configure + media tools with sections', async () => {
   const fake = fakeHostCtx()
   applyPlugin(fake, { baseUrl: `http://127.0.0.1:${port}`, apiKey: 'test-key', video: { pollIntervalMs: 20 } })
-  assert.deepEqual(fake.registered.map((tool) => tool.name), ['configure_grok2api', 'generate_image', 'generate_video'])
+  assert.deepEqual(fake.registered.map((tool) => tool.name), ['configure_grok2api', 'generate_image', 'generate_video', 'recognize_image'])
   assert.equal(fake.sections.length, 1)
   assert.equal(fake.sections[0].name, 'tool:grok2api-media-tool')
   assert.ok(fake.sections[0].order > 0)
@@ -317,13 +390,13 @@ await check('apply registers the settings namespace and re-registers tools live'
     assert.equal(fake.registration.base.baseUrl, `http://127.0.0.1:${port}`)
     assert.equal(typeof fake.registration.validate, 'function')
     assert.throws(() => fake.registration.validate({ baseUrl: 'not-a-url' }), /not a valid URL/)
-    assert.deepEqual(fake.registered.map((tool) => tool.name), ['configure_grok2api', 'generate_image', 'generate_video'])
+    assert.deepEqual(fake.registered.map((tool) => tool.name), ['configure_grok2api', 'generate_image', 'generate_video', 'recognize_image'])
     assert.deepEqual(fake.disposed, [])
     // A settings-service commit triggers reload (which re-reads disk and re-registers).
     fake.settingsWatcher()
-    assert.deepEqual(fake.disposed, ['configure_grok2api', 'generate_image', 'generate_video'])
-    assert.equal(fake.registered.length, 6)
-    assert.equal(fake.registered.at(-1).name, 'generate_video')
+    assert.deepEqual(fake.disposed, ['configure_grok2api', 'generate_image', 'generate_video', 'recognize_image'])
+    assert.equal(fake.registered.length, 8)
+    assert.equal(fake.registered.at(-1).name, 'recognize_image')
   } finally {
     process.env.DSH_HOME = previousHome
     await rm(dshHome, { recursive: true, force: true })
@@ -355,9 +428,9 @@ await check('configure_grok2api persists to settings.yaml and re-applies live', 
     const { readSettingsDocument } = await import('../index.js')
     const document = readSettingsDocument(next.savedTo)
     assert.deepEqual(document['grok2api-media-tool'], { baseUrl: `http://127.0.0.1:12345/v2`, apiKey: 'new-key', saveDir: 'media' })
-    assert.equal(fake.disposed.length, 3)
-    assert.equal(fake.registered.length, 6)
-    const imageToolEntry = fake.registered.at(-2)
+    assert.equal(fake.disposed.length, 4)
+    assert.equal(fake.registered.length, 8)
+    const imageToolEntry = fake.registered.find((entry) => entry.name === 'generate_image')
     assert.equal(imageToolEntry.name, 'generate_image')
     // A fresh apply in the same home picks the persisted section up.
     const fake2 = fakeHostCtx()
@@ -513,10 +586,12 @@ await check('generate_image execute saves url + b64 into session workspace', asy
   assert.ok(value.images[0].path.startsWith(workspace))
   assert.ok(value.images[1].path.endsWith('.png'))
   assert.match(value.images[1].url, /^\/grok2api-media\//)
-  // The route the plugin mounted is the one that serves those urls.
-  assert.equal(fake.routes.length, 1)
+  // The routes the plugin mounted: media serving plus the composer upload path.
+  assert.equal(fake.routes.length, 2)
   assert.equal(fake.routes[0].kind, 'prefix')
   assert.equal(fake.routes[0].path, '/grok2api-media')
+  assert.equal(fake.routes[1].kind, 'prefix')
+  assert.equal(fake.routes[1].path, '/grok2api-upload')
   const rendered = tool.output.render({ prompt: 'cat' }, value)
   assert.match(rendered[0].text, /Generated 2 image\(s\)/)
   assert.match(rendered[0].text, /list each local file path/)
@@ -557,17 +632,81 @@ await check('generate_video execute polls and saves the video', async () => {
   assert.match(rendered[0].text, /Generated a video/)
 })
 
+await check('recognize_image execute sends local image and returns text', async () => {
+  const path = join(workspace, 'recognize.png')
+  await writeFile(path, b64PngBuffer())
+  const fake = fakeHostCtx()
+  applyPlugin(fake, {
+    baseUrl: `http://127.0.0.1:${port}`,
+    apiKey: 'test-key',
+    saveDir: 'generated',
+  })
+  const tool = fake.registered.find((entry) => entry.name === 'recognize_image')
+  const value = await tool.execute({ image: path, prompt: 'What is this?' }, exec)
+  assert.equal(value.text, 'The image shows a cat.')
+  assert.equal(value.model, 'grok-4.6')
+  // `latest` model resolution is cached per session: a second call must not
+  // hit /v1/models again.
+  const again = await tool.execute({ image: path, prompt: 'What is this?' }, exec)
+  assert.equal(again.text, 'The image shows a cat.')
+  assert.equal(seenModels, 1)
+  const body = seenChat.at(-1)
+  assert.ok(body.messages[0].content[1].image_url.url.startsWith('data:image/png;base64,'))
+  const rendered = tool.output.render({ image: path, prompt: 'What is this?' }, value)
+  assert.match(rendered[0].text, /The image shows a cat/)
+})
+
+await check('agent/pre-step bridge converts uploaded images to text', async () => {
+  const fake = fakeHostCtx()
+  const agentListeners = []
+  const fakeAgent = {
+    ctx: {
+      on: (name, listener) => {
+        agentListeners.push({ name, listener })
+        return () => {}
+      },
+    },
+  }
+  fake.agentsList.push(fakeAgent)
+  applyPlugin(fake, {
+    baseUrl: `http://127.0.0.1:${port}`,
+    apiKey: 'test-key',
+    saveDir: 'generated',
+  })
+  const preStep = agentListeners.find((entry) => entry.name === 'agent/pre-step')
+  assert.ok(preStep, 'agent/pre-step listener is registered on the agent scope')
+  const userMessage = {
+    role: 'user',
+    content: [
+      { type: 'text', text: '看看这张图' },
+      { type: 'image', attachment: { attachmentId: 'a1' } },
+    ],
+  }
+  const decision = await preStep.listener(
+    { turn: 1, step: 0, signal },
+    async () => ({ kind: 'enter', messages: [userMessage] }),
+  )
+  assert.equal(decision.kind, 'enter')
+  assert.equal(decision.messages.length, 1)
+  assert.equal(decision.messages[0].content.length, 2)
+  assert.equal(decision.messages[0].content[0].type, 'text')
+  assert.equal(decision.messages[0].content[1].type, 'text')
+  assert.match(decision.messages[0].content[1].text, /用户上传的图片内容：The image shows a cat/)
+})
+
+
+
 await check('client bundle registers the info card and the media toolviews', async () => {
   let handoff
   globalThis.window = { __ModuleLoader__: { load: (value) => { handoff = value } } }
   await import('../client.js')
   assert.ok(handoff, 'factory handoff registered')
   assert.equal(handoff.id, 'dsh-plugin-grok2api-media-tool')
-  // `react` is the only platform seed word this bundle may require: binding
-  // ctx.settingsScope would drag in connection/remote injections whose absence
-  // fails the entry — and one failed client entry fails the whole web boot.
+  // The bundle only requires react; it deliberately does not bind
+  // ctx.settingsScope or the conversation service (the upload button uses the
+  // plugin's own host route instead of draft-image attachments).
   const requires = {
-    react: { createElement: () => ({}), useState: (init) => [init, () => {}] },
+    react: { createElement: () => ({}), useState: (init) => [init, () => {}], useRef: () => ({ current: null }) },
   }
   const client = handoff.factory((spec) => {
     if (!(spec in requires)) throw new Error(`unexpected require: ${spec}`)
@@ -595,13 +734,22 @@ await check('client bundle registers the info card and the media toolviews', asy
   // No `inject` face: the card owns no host-backed state to project.
   assert.equal(slots[0].options.inject, undefined)
   assert.equal(typeof slots[0].component, 'function')
+  // The composer upload entry is registered in the conversation input row.
+  const uploadInject = slotGenerators.find((entry) => entry.name === 'conversation.input.left')
+  assert.ok(uploadInject)
+  uploadInject.generator()
+  const uploadSlot = slots[1]
+  assert.equal(uploadSlot.options.id, 'grok2api-upload')
+  assert.equal(uploadSlot.options.order, 30)
+  assert.equal(uploadSlot.options.inject, undefined)
+  assert.equal(typeof uploadSlot.component, 'function')
   // The embedded media toolviews register under the two wire tool names.
   const toolviewInject = slotGenerators.find((entry) => entry.name === 'tool.call.toolview')
   assert.ok(toolviewInject)
   const generator = toolviewInject.generator()
   let next = generator.next()
   while (!next.done) { next = generator.next() }
-  const keys = slots.slice(1).map((entry) => entry.options.key).sort()
+  const keys = slots.slice(2).map((entry) => entry.options.key).sort()
   assert.deepEqual(keys, ['generate_image', 'generate_video'])
   const videoCard = slots.find((entry) => entry.options.key === 'generate_video')
   assert.equal(typeof videoCard.component, 'function')
@@ -645,6 +793,29 @@ await check('media route serves only signed paths, and the signature survives a 
     await rm(keyHome, { recursive: true, force: true })
   }
 })
+
+await check('upload route saves a file and returns its local path', async () => {
+  const { createUploadHandler, UPLOAD_ROUTE_PATH } = await import('../media-proxy.js')
+  const uploadHome = await mkdtemp(join(process.cwd(), '.tmp', 'dsh-upload-'))
+  const uploadServer = http.createServer(createUploadHandler(uploadHome))
+  await new Promise((resolve) => uploadServer.listen(0, '127.0.0.1', resolve))
+  const origin = `http://127.0.0.1:${uploadServer.address().port}`
+  try {
+    const response = await fetch(`${origin}${UPLOAD_ROUTE_PATH}?name=test.png`, {
+      method: 'POST',
+      headers: { 'content-type': 'image/png' },
+      body: Buffer.from('FAKEPNG'),
+    })
+    assert.equal(response.status, 200)
+    const data = await response.json()
+    assert.ok(data.path.startsWith(uploadHome))
+    assert.equal(await readFile(data.path, 'utf8'), 'FAKEPNG')
+  } finally {
+    await new Promise((resolve) => uploadServer.close(resolve))
+    await rm(uploadHome, { recursive: true, force: true })
+  }
+})
+
 
 server.close()
 for (const dispose of testDisposers) {

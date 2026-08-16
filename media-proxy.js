@@ -18,10 +18,13 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createReadStream, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import { extname, join } from 'node:path'
+import { basename, extname, join } from 'node:path'
 
 /** Route path registered on the host web server (prefix match, no trailing slash). */
 export const MEDIA_ROUTE_PATH = '/grok2api-media'
+
+/** Upload route used by the composer button to turn a picked file into a local path. */
+export const UPLOAD_ROUTE_PATH = '/grok2api-upload'
 
 /** Signing key file inside the harness home. */
 export const MEDIA_KEY_FILE = '.grok2api-media-key'
@@ -173,3 +176,67 @@ export function createMediaHandler(key) {
     }
   }
 }
+
+/** Maximum bytes accepted by the composer upload route. */
+const UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+
+/** Keep only a safe filename fragment for the on-disk upload. */
+function sanitizeUploadName(value) {
+  const base = basename(String(value ?? 'image')).replace(/[^\w.-]+/g, '_').slice(0, 80)
+  return base.length > 0 ? base : 'image'
+}
+
+/**
+ * Build the upload route handler. It accepts a raw binary POST body, stores it
+ * under `$DSH_HOME/uploads`, and returns the absolute path the agent can hand
+ * to `recognize_image` (or any file-aware tool).
+ * @param {string} homeDir - the harness home ($DSH_HOME).
+ * @returns {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<void>}
+ */
+export function createUploadHandler(homeDir) {
+  return async (req, res) => {
+    try {
+      if (req.method !== 'POST') {
+        res.writeHead(405, { 'content-type': 'application/json' })
+        res.end('{"error":"method not allowed"}')
+        return
+      }
+      let url
+      try {
+        url = new URL(req.url ?? '/', 'http://upload')
+      } catch {
+        res.writeHead(400, { 'content-type': 'application/json' })
+        res.end('{"error":"bad request"}')
+        return
+      }
+      const name = sanitizeUploadName(url.searchParams.get('name'))
+      const ext = extname(name) || '.img'
+      const dir = join(homeDir, 'uploads')
+      mkdirSync(dir, { recursive: true })
+      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15)
+      const filePath = join(dir, `grok2api-upload-${stamp}-${Math.random().toString(36).slice(2, 8)}${ext}`)
+      const chunks = []
+      let size = 0
+      for await (const chunk of req) {
+        chunks.push(chunk)
+        size += chunk.length
+        if (size > UPLOAD_MAX_BYTES) {
+          res.writeHead(413, { 'content-type': 'application/json' })
+          res.end('{"error":"upload too large"}')
+          return
+        }
+      }
+      writeFileSync(filePath, Buffer.concat(chunks))
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ path: filePath, name }))
+    } catch (error) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: String(error?.message ?? error) }))
+      } else {
+        res.end()
+      }
+    }
+  }
+}
+
