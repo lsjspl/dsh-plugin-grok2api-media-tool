@@ -78,7 +78,7 @@
         // --- field (like ValueField) ---
         field: { display: 'flex', flexDirection: 'column', gap: '6px', padding: '12px 0' },
         head: { display: 'flex', alignItems: 'center', gap: '8px' },
-        label: { flex: 1, minWidth: 0, fontSize: '13px', fontWeight: 500, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)' },
+        label: { flex: 1, minWidth: 0, fontSize: '13px', fontWeight: 500, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
         badges: { display: 'inline-flex', alignItems: 'center', gap: '8px' },
         badge: {
           borderRadius: '999px', padding: '1px 8px', fontSize: '11px', lineHeight: '17px',
@@ -320,8 +320,12 @@
           const hasOverride = !!overrideProvider[purpose]
           const modelOptions = (modelLists[purpose] || []).map((m) => ({ value: m.id, label: m.name || m.id }))
           const defaultModel = purpose === 'vision' ? VISION_DEFAULT : (FLAVOR_DEFAULTS[apiFlavor] || {})[purpose] || ''
-          const optionsWithDefault = modelOptions.length && !modelOptions.some((o) => o.value === (modelVal || defaultModel))
-            ? [{ value: modelVal || defaultModel, label: (modelVal || defaultModel) + '（当前）' }, ...modelOptions] : modelOptions
+          // Always a dropdown. When the catalog is empty (provider not yet
+          // picked, or discovery not done), the list is the default value alone.
+          const currentVal = modelVal || defaultModel
+          const selectOptions = modelOptions.some((o) => o.value === currentVal)
+            ? modelOptions
+            : [{ value: currentVal, label: currentVal + '（默认）' }, ...modelOptions]
           const disabled = !writable || saving
           return h('div', { style: { ...STYLE.field, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
             h('div', { style: STYLE.sectionTitle }, label),
@@ -341,35 +345,28 @@
                 modelOverridden ? h('button', { style: STYLE.reset, onClick: () => resetField(`${purpose}.model`), disabled }, '重置') : null,
               ),
             ),
-            apiSource === 'llm-provider' && modelOptions.length
-              ? h('select', {
-                  value: modelVal || defaultModel, disabled, style: STYLE.select,
-                  onChange: (e) => edit(`${purpose}.model`, e.target.value),
-                }, optionsWithDefault.map((o) => h('option', { value: o.value }, o.label)))
-              : h('input', {
-                  type: 'text', value: modelVal, disabled, style: STYLE.input, placeholder: defaultModel,
-                  onChange: (e) => edit(`${purpose}.model`, e.target.value),
-                }),
+            h('select', {
+              value: currentVal, disabled, style: STYLE.select,
+              onChange: (e) => edit(`${purpose}.model`, e.target.value),
+            }, selectOptions.map((o) => h('option', { value: o.value }, o.label))),
             hint ? h('p', { style: STYLE.hint }, hint) : null,
-            apiSource === 'llm-provider'
-              ? h('div', { style: STYLE.subField },
-                  h('div', { style: STYLE.head },
-                    h('label', { style: { ...STYLE.label, flex: '0' } },
-                      h('input', {
-                        type: 'checkbox', style: STYLE.checkbox, checked: hasOverride, disabled,
-                        onChange: (e) => setOverrideProvider((o) => ({ ...o, [purpose]: e.target.checked })),
-                      }),
-                      ' 单独指定 provider',
-                    ),
-                  ),
-                  hasOverride
-                    ? renderField(`${purpose}.provider`, 'provider', null, {
-                        type: 'select', allowBlank: true, blankLabel: '（用全局）',
-                        options: providerOptions.map((p) => ({ value: p.provider, label: p.displayName || p.provider })),
-                      })
-                    : null,
-                )
-              : null,
+            h('div', { style: STYLE.subField },
+              h('div', { style: STYLE.head },
+                h('label', { style: { ...STYLE.label, flex: '0 0 auto', whiteSpace: 'nowrap' } },
+                  h('input', {
+                    type: 'checkbox', style: STYLE.checkbox, checked: hasOverride, disabled,
+                    onChange: (e) => setOverrideProvider((o) => ({ ...o, [purpose]: e.target.checked })),
+                  }),
+                  ' 单独指定 provider',
+                ),
+              ),
+              hasOverride
+                ? renderField(`${purpose}.provider`, 'provider', null, {
+                    type: 'select', allowBlank: true, blankLabel: '（用全局）',
+                    options: providerOptions.map((p) => ({ value: p.provider, label: p.displayName || p.provider })),
+                  })
+                : null,
+            ),
           )
         }
 
@@ -384,7 +381,6 @@
           )
         }
 
-        const manual = apiSource === 'manual'
         return h('li', { style: { ...STYLE.card, ...(open ? STYLE.cardOpen : {}) } },
           // Collapsible header: name + description, a pending badge when dirty,
           // and a chevron that flips when open.
@@ -397,20 +393,11 @@
             h('span', { style: { ...STYLE.chevron, transform: open ? 'rotate(180deg)' : 'none' } }, '▾'),
           ),
           open ? h('div', { style: STYLE.body },
-            // --- 连接配置 ---
-            renderField('apiSource', '配置来源', null, {
-              type: 'select',
-              options: [{ value: 'manual', label: '手动填写' }, { value: 'llm-provider', label: '复用 dsh 模型提供方' }],
+            // --- 连接配置：始终复用 dsh 已配置的 LLM 提供方 ---
+            renderField('llmProvider', 'provider', '选择已配置的 LLM 提供方，连接与默认模型将取自它。', {
+              type: 'select', allowBlank: true, blankLabel: '（未选）',
+              options: providerOptions.map((p) => ({ value: p.provider, label: p.displayName || p.provider })),
             }),
-            apiSource === 'llm-provider'
-              ? renderField('llmProvider', 'provider', '选择已配置的 LLM 提供方，连接与默认模型将取自它。', {
-                  type: 'select', allowBlank: true, blankLabel: '（未选）',
-                  options: providerOptions.map((p) => ({ value: p.provider, label: p.displayName || p.provider })),
-                })
-              : null,
-            manual ? renderField('baseUrl', '地址', 'grok2api HTTP(S) 地址') : null,
-            manual ? renderField('apiKey', '密钥', '留空清除；非空以 Bearer 发送', { type: 'password', placeholder: '(未设置)' }) : null,
-            manual ? renderField('apiKeyEnv', '密钥环境变量', 'apiKey 为空时从此环境变量读取') : null,
             renderField('apiFlavor', '后端类型', null, {
               type: 'select',
               options: FLAVORS.map((f) => ({ value: f, label: f })),
