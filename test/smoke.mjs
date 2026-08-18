@@ -729,8 +729,7 @@ await check('client bundle registers the info card and the media toolviews', asy
   assert.ok(settingsInject)
   settingsInject.generator()
   assert.equal(slots.length, 1)
-  assert.equal(slots[0].options.id, 'grok2api-media-tool')
-  assert.equal(slots[0].options.label, 'Grok2API Media Tool')
+  assert.equal(slots[0].options.key, 'grok2api-media-tool')
   // No `inject` face: the card owns no host-backed state to project.
   assert.equal(slots[0].options.inject, undefined)
   assert.equal(typeof slots[0].component, 'function')
