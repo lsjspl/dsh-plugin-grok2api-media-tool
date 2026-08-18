@@ -59,7 +59,7 @@ grok2api-media-tool:
   apiFlavor: chenyme
 ```
 
-> 说明：当前 dsh 版本的设置页只开放内置命名空间，插件暂无法提供图形化配置表单，请使用以上方式配置。
+> 说明：dsh rc.7+ 在设置页开放了插件命名空间，本插件提供图形化配置表单（设置 → Plugins → 配置 → Grok2API Media Tool）：可选 provider 与各用途模型，也支持手动填地址/密钥。也可继续使用以上三种方式配置。
 
 ## 配置项
 

@@ -56,7 +56,7 @@ pnpm pack --pack-destination dist
 ## 依赖与兼容性
 
 - **无需接收方手动安装任何依赖**：peer 依赖（`@deepseek-ai/cordis`、`@deepseek-ai/dsh-settings`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/schemastery`）全部由 dsh 安装自带的模块回退（`$DSH_HOME/profiles/node_modules` junction）解析；唯一的普通依赖 `js-yaml` 由 pnpm 随安装拉取。
-- 兼容性基线：**dsh `0.1.0-rc.6`**（按该版本的插件 API / settings / client-modules 机制开发）。dsh 仍处于 pre-release，接口可能变化；升级 dsh 后如插件报错，优先重新安装本插件的最新版。
+- 兼容性基线：**dsh `0.1.0-rc.7`**（按该版本的插件 API / settings / client-modules 机制开发）。dsh 仍处于 pre-release，接口可能变化；升级 dsh 后如插件报错，优先重新安装本插件的最新版。
 - 运行时要求：接收方 Node ≥ 22（dsh 自身要求），grok2api 服务需网络可达。
 - 插件不依赖接收方 grok2api 的部署位置：地址/密钥/后端类型全部由接收方在自己的设置里填。
 

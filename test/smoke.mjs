@@ -334,9 +334,12 @@ await check('HTTP error carries server detail', async () => {
 await check('normalizeConfig validates and defaults', () => {
   const resolved = normalizeConfig({ baseUrl: 'http://127.0.0.1:1/', apiFlavor: 'chenyme', image: {}, video: {} })
   assert.equal(resolved.baseUrl, 'http://127.0.0.1:1')
-  assert.equal(resolved.image.model, 'grok-imagine-image-quality')
-  assert.equal(resolved.video.model, 'grok-imagine-video')
-  assert.equal(resolved.vision.model, 'latest')
+  // An empty model stays empty here: the flavor/provider default is derived
+  // later in reload() (via resolveFactsForPurpose), not in normalizeConfig.
+  assert.equal(resolved.image.model, '')
+  assert.equal(resolved.video.model, '')
+  assert.equal(resolved.vision.model, '')
+  assert.equal(resolved.image.provider, '')
   assert.equal(resolved.vision.enabled, true)
   assert.equal(resolved.saveDir, 'generated')
   assert.equal(resolved.saveToWorkspace, true)
@@ -702,26 +705,42 @@ await check('client bundle registers the info card and the media toolviews', asy
   await import('../client.js')
   assert.ok(handoff, 'factory handoff registered')
   assert.equal(handoff.id, 'dsh-plugin-grok2api-media-tool')
-  // The bundle only requires react; it deliberately does not bind
-  // ctx.settingsScope or the conversation service (the upload button uses the
-  // plugin's own host route instead of draft-image attachments).
+  // The bundle requires react only; the settings card subscribes to the
+  // settings scope with React's useSyncExternalStore and pulls the provider
+  // directory through ctx.connection.api.llm, so those ctx faces are mocked.
   const requires = {
-    react: { createElement: () => ({}), useState: (init) => [init, () => {}], useRef: () => ({ current: null }) },
+    react: {
+      createElement: () => ({}),
+      useState: (init) => [typeof init === 'function' ? init() : init, () => {}],
+      useRef: () => ({ current: null }),
+      useEffect: () => {},
+      useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+    },
   }
   const client = handoff.factory((spec) => {
     if (!(spec in requires)) throw new Error(`unexpected require: ${spec}`)
     return requires[spec]
   })
   assert.equal(client.name, 'grok2api-media-tool-client')
-  assert.deepEqual(client.inject, ['slots'])
+  assert.deepEqual(client.inject, ['slots', 'connection', 'remote', 'settingsScope'])
 
   const slots = []
   const slotGenerators = []
+  // A mock settings scope: an unavailable snapshot (the card handles that
+  // branch without throwing), and no-op set/unset/subscribe.
+  const mockScope = {
+    getSnapshot: () => ({ status: 'unavailable', value: undefined, user: undefined, revision: undefined, writable: false, mode: 'memory' }),
+    subscribe: () => () => {},
+    set: async () => {},
+    unset: async () => {},
+  }
   const fakeCtx = {
     slots: {
       inject: (name, generator) => { slotGenerators.push({ name, generator }) },
       register: (options, component) => { slots.push({ options, component }); return slots.at(-1) },
     },
+    settingsScope: { bind: () => mockScope },
+    connection: { api: { llm: { providers: async () => ({ result: { ok: true, value: { providers: [] } } }) } } },
     effect: (fn) => { fn(); return () => {} },
   }
   client.apply(fakeCtx)
@@ -730,8 +749,6 @@ await check('client bundle registers the info card and the media toolviews', asy
   settingsInject.generator()
   assert.equal(slots.length, 1)
   assert.equal(slots[0].options.key, 'grok2api-media-tool')
-  // No `inject` face: the card owns no host-backed state to project.
-  assert.equal(slots[0].options.inject, undefined)
   assert.equal(typeof slots[0].component, 'function')
   // The composer upload entry is registered in the conversation input row.
   const uploadInject = slotGenerators.find((entry) => entry.name === 'conversation.input.left')
@@ -740,7 +757,6 @@ await check('client bundle registers the info card and the media toolviews', asy
   const uploadSlot = slots[1]
   assert.equal(uploadSlot.options.id, 'grok2api-upload')
   assert.equal(uploadSlot.options.order, 30)
-  assert.equal(uploadSlot.options.inject, undefined)
   assert.equal(typeof uploadSlot.component, 'function')
   // The embedded media toolviews register under the two wire tool names.
   const toolviewInject = slotGenerators.find((entry) => entry.name === 'tool.call.toolview')

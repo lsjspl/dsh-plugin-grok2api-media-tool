@@ -75,21 +75,24 @@ export const Config = z.object({
   apiFlavor: z.string().description('Backend flavor: chenyme (Go) or aurora (legacy Python).').default('chenyme'),
   image: z.object({
     enabled: z.boolean().description('Register the generate_image tool.').default(true),
-    model: z.string().description('Default image model; empty selects the flavor default.').default(''),
+    model: z.string().description('Image model; empty selects the flavor default, or the provider catalog default when apiSource is llm-provider.').default(''),
+    provider: z.string().description('Per-purpose provider override (a key in llm-pi-ai providers); empty uses the global llmProvider.').default(''),
     timeoutMs: z.number().description('generate_image overall timeout in milliseconds.').default(180000),
-  }).default({ enabled: true, model: '', timeoutMs: 180000 }),
+  }).default({ enabled: true, model: '', provider: '', timeoutMs: 180000 }),
   video: z.object({
     enabled: z.boolean().description('Register the generate_video tool.').default(true),
-    model: z.string().description('Default video model; empty selects the flavor default.').default(''),
+    model: z.string().description('Video model; empty selects the flavor default, or the provider catalog default when apiSource is llm-provider.').default(''),
+    provider: z.string().description('Per-purpose provider override (a key in llm-pi-ai providers); empty uses the global llmProvider.').default(''),
     timeoutMs: z.number().description('generate_video overall timeout (creation + polling + download).').default(1200000),
     pollIntervalMs: z.number().description('Video status polling interval in milliseconds.').default(5000),
-  }).default({ enabled: true, model: '', timeoutMs: 1200000, pollIntervalMs: 5000 }),
+  }).default({ enabled: true, model: '', provider: '', timeoutMs: 1200000, pollIntervalMs: 5000 }),
   vision: z.object({
     enabled: z.boolean().description('Register the recognize_image tool.').default(true),
     model: z.string().description('Default Grok vision model for image recognition.').default(VISION_MODEL_DEFAULT),
+    provider: z.string().description('Per-purpose provider override (a key in llm-pi-ai providers); empty uses the global llmProvider.').default(''),
     timeoutMs: z.number().description('recognize_image overall timeout in milliseconds.').default(60000),
     bridgeToText: z.boolean().description('Convert uploaded images to Grok text before sending to a text-only main model.').default(true),
-  }).default({ enabled: true, model: VISION_MODEL_DEFAULT, timeoutMs: 60000, bridgeToText: true }),
+  }).default({ enabled: true, model: VISION_MODEL_DEFAULT, provider: '', timeoutMs: 60000, bridgeToText: true }),
   saveToWorkspace: z.boolean().description('Download generated media into the session workspace.').default(true),
   saveDir: z.string().description('Workspace subdirectory for saved media; must stay relative.').default('generated'),
   requestTimeoutMs: z.number().description('Per-HTTP-request timeout in milliseconds.').default(60000),
@@ -197,18 +200,21 @@ export function normalizeConfig(raw) {
     llmProvider: stringOrEmpty(input.llmProvider, 'llmProvider'),
     image: {
       enabled: image.enabled === undefined ? true : image.enabled,
-      model: stringOrEmpty(image.model, 'image.model') || FLAVOR_MODELS[apiFlavor].image,
+      model: stringOrEmpty(image.model, 'image.model'),
+      provider: stringOrEmpty(image.provider, 'image.provider'),
       timeoutMs: image.timeoutMs,
     },
     video: {
       enabled: video.enabled === undefined ? true : video.enabled,
-      model: stringOrEmpty(video.model, 'video.model') || FLAVOR_MODELS[apiFlavor].video,
+      model: stringOrEmpty(video.model, 'video.model'),
+      provider: stringOrEmpty(video.provider, 'video.provider'),
       timeoutMs: video.timeoutMs,
       pollIntervalMs: video.pollIntervalMs,
     },
     vision: {
       enabled: vision.enabled === undefined ? true : vision.enabled,
-      model: stringOrEmpty(vision.model, 'vision.model') || VISION_MODEL_DEFAULT,
+      model: stringOrEmpty(vision.model, 'vision.model'),
+      provider: stringOrEmpty(vision.provider, 'vision.provider'),
       timeoutMs: vision.timeoutMs,
       bridgeToText: vision.bridgeToText,
     },
@@ -245,44 +251,72 @@ export function readUserSection(path = settingsFilePath()) {
 
 /**
  * Reuse facts from a provider configured under the `llm-pi-ai:` settings
- * section: its base URL (the `v1` chat suffix stripped), credential reference,
- * and grok image/video/vision model ids when the provider catalog lists them.
+ * section: its base URL (the `v1` chat suffix stripped) and credential
+ * reference. Per-purpose model ids are derived by {@link deriveDefaultModel}.
  * @param {string} providerName - key in `llm-pi-ai.providers`, e.g. 'grok'.
- * @returns {{ baseUrl?: string, apiKeyEnv?: string, imageModel?: string, videoModel?: string, visionModel?: string }} resolved facts.
+ * @returns {{ baseUrl?: string, apiKeyEnv?: string, models: unknown[] }} resolved facts.
  */
 export function resolveProviderFacts(providerName, path = settingsFilePath()) {
   const provider = readSettingsDocument(path)['llm-pi-ai']?.providers?.[providerName]
-  if (provider === undefined || typeof provider !== 'object' || provider === null) return {}
+  if (provider === undefined || typeof provider !== 'object' || provider === null) return { models: [] }
   const baseURL = typeof provider.baseURL === 'string' ? provider.baseURL.replace(/\/+$/, '') : undefined
   const baseUrl = baseURL !== undefined
     ? baseURL.replace(/\/v1$/, '')
     : undefined
   const models = Array.isArray(provider.models) ? provider.models : []
-  const idOf = (needle) => {
-    const entry = models.find((model) => typeof model?.id === 'string' && model.id.includes(needle))
-    return entry?.id
-  }
-  // Prefer the higher-quality image model when the provider catalog lists it:
-  // a bare "imagine-image" substring would otherwise match whichever entry
-  // appears first (base, -quality, or -lite).
-  const imageModel = idOf('imagine-image-quality') ?? idOf('imagine-image')
-  // Pick the newest Grok chat model from the provider catalog for image
-  // recognition, skipping generation-only ids (imagine/video).
-  const chatModelIds = models
-    .map((model) => typeof model?.id === 'string' ? model.id : '')
-    .filter((id) => id.length > 0 && !/imagine|video/i.test(id))
-  const visionModel = chatModelIds.find((id) => /grok-4[.-]6/i.test(id))
-    ?? chatModelIds.find((id) => /grok-4/i.test(id))
-    ?? chatModelIds.find((id) => /grok-3/i.test(id))
-    ?? chatModelIds[0]
   return {
     ...(baseUrl !== undefined ? { baseUrl } : {}),
     ...(typeof provider.apiKeyEnv === 'string' && provider.apiKeyEnv.length > 0 ? { apiKeyEnv: provider.apiKeyEnv } : {}),
-    ...(imageModel !== undefined ? { imageModel } : {}),
-    ...(idOf('imagine-video') !== undefined ? { videoModel: idOf('imagine-video') } : {}),
-    ...(visionModel !== undefined ? { visionModel } : {}),
+    models,
   }
 }
+
+/**
+ * Pick the default model id for one purpose out of a provider's model catalog.
+ * image prefers the higher-quality imagine-image-quality; video picks the
+ * imagine-video entry; vision picks the newest Grok chat model (skipping the
+ * generation-only imagine/video ids).
+ * @param {unknown[]} models - the provider's `models` array.
+ * @param {'image'|'video'|'vision'} purpose - which model to pick.
+ * @returns {string|undefined} the model id, or undefined when the catalog lists none.
+ */
+export function deriveDefaultModel(models, purpose) {
+  const ids = models
+    .map((model) => typeof model?.id === 'string' ? model.id : '')
+    .filter((id) => id.length > 0)
+  const idOf = (needle) => ids.find((id) => id.includes(needle))
+  if (purpose === 'image') return idOf('imagine-image-quality') ?? idOf('imagine-image')
+  if (purpose === 'video') return idOf('imagine-video')
+  // vision: skip generation-only ids, prefer the newest Grok chat model.
+  const chatIds = ids.filter((id) => !/imagine|video/i.test(id))
+  return chatIds.find((id) => /grok-4[.-]6/i.test(id))
+    ?? chatIds.find((id) => /grok-4/i.test(id))
+    ?? chatIds.find((id) => /grok-3/i.test(id))
+    ?? chatIds[0]
+}
+
+/**
+ * Resolve per-purpose facts for one of image/video/vision. The provider is the
+ * purpose's own `provider` override when set, else the global `llmProvider`.
+ * The model is the user's selection when set, else the catalog default.
+ * @param {string} globalProvider - the namespace's global llmProvider.
+ * @param {'image'|'video'|'vision'} purpose - which purpose to resolve for.
+ * @param {string} purposeProvider - the purpose's own provider override (may be empty).
+ * @param {string} userModel - the purpose's user-selected model (may be empty).
+ * @returns {{ providerName: string, baseUrl?: string, apiKeyEnv?: string, model: string|undefined }} per-purpose facts.
+ */
+export function resolveFactsForPurpose(globalProvider, purpose, purposeProvider, userModel, path = settingsFilePath()) {
+  const providerName = purposeProvider || globalProvider
+  const facts = resolveProviderFacts(providerName, path)
+  const model = userModel || deriveDefaultModel(facts.models, purpose)
+  return {
+    providerName,
+    ...(facts.baseUrl !== undefined ? { baseUrl: facts.baseUrl } : {}),
+    ...(facts.apiKeyEnv !== undefined ? { apiKeyEnv: facts.apiKeyEnv } : {}),
+    model,
+  }
+}
+
 
 /**
  * Merge a patch into the plugin's user section and write the document back.
@@ -682,9 +716,12 @@ const CONFIGURE_FIELDS = {
   apiFlavor: { type: 'string', enum: FLAVORS, description: 'Backend flavor: chenyme (Go) or aurora (legacy Python).' },
   apiSource: { type: 'string', enum: ['manual', 'llm-provider'], description: "Config source: manual (this section's fields) or llm-provider (reuse a provider from the llm-pi-ai settings section)." },
   llmProvider: { type: 'string', description: 'Provider name in the llm-pi-ai providers section to reuse, e.g. grok; used when apiSource is llm-provider.' },
-  imageModel: { type: 'string', description: 'Default image model; empty selects the flavor default.' },
-  videoModel: { type: 'string', description: 'Default video model; empty selects the flavor default.' },
+  imageModel: { type: 'string', description: 'Image model; empty selects the flavor default, or the provider catalog default when apiSource is llm-provider.' },
+  videoModel: { type: 'string', description: 'Video model; empty selects the flavor default, or the provider catalog default when apiSource is llm-provider.' },
   visionModel: { type: 'string', description: 'Default Grok vision model used by recognize_image.' },
+  imageProvider: { type: 'string', description: 'Per-purpose provider override for image (a key in llm-pi-ai providers); empty uses the global llmProvider.' },
+  videoProvider: { type: 'string', description: 'Per-purpose provider override for video (a key in llm-pi-ai providers); empty uses the global llmProvider.' },
+  visionProvider: { type: 'string', description: 'Per-purpose provider override for vision (a key in llm-pi-ai providers); empty uses the global llmProvider.' },
   visionBridgeToText: { type: 'boolean', description: 'Convert uploaded images to Grok text before sending to a text-only main model.' },
   imageEnabled: { type: 'boolean', description: 'Whether generate_image is available.' },
   videoEnabled: { type: 'boolean', description: 'Whether generate_video is available.' },
@@ -736,6 +773,9 @@ function configureTool(holder) {
         else if (key === 'imageModel') patch.image = { ...current.image, model: typeof args.imageModel === 'string' ? args.imageModel.trim() : '' }
         else if (key === 'videoModel') patch.video = { ...current.video, model: typeof args.videoModel === 'string' ? args.videoModel.trim() : '' }
         else if (key === 'visionModel') patch.vision = { ...current.vision, model: typeof args.visionModel === 'string' ? args.visionModel.trim() : '' }
+        else if (key === 'imageProvider') patch.image = { ...current.image, provider: typeof args.imageProvider === 'string' ? args.imageProvider.trim() : '' }
+        else if (key === 'videoProvider') patch.video = { ...current.video, provider: typeof args.videoProvider === 'string' ? args.videoProvider.trim() : '' }
+        else if (key === 'visionProvider') patch.vision = { ...current.vision, provider: typeof args.visionProvider === 'string' ? args.visionProvider.trim() : '' }
         else if (key === 'visionBridgeToText') patch.vision = { ...current.vision, bridgeToText: Boolean(args.visionBridgeToText) }
         else if (key === 'imageEnabled') patch.image = { ...current.image, enabled: Boolean(args.imageEnabled) }
         else if (key === 'videoEnabled') patch.video = { ...current.video, enabled: Boolean(args.videoEnabled) }
@@ -900,41 +940,54 @@ export function apply(ctx, config) {
     const u = readUserSection()
     const source = u.apiSource ?? schemaEntry.apiSource
     const providerName = u.llmProvider ?? schemaEntry.llmProvider
-    const facts = source === 'llm-provider' ? resolveProviderFacts(providerName) : {}
-    if (source === 'llm-provider' && facts.baseUrl === undefined) {
+    // The global provider supplies the connection (baseUrl + credential) every
+    // purpose shares unless a purpose sets its own `provider` override. Model
+    // ids come from each purpose's resolved provider catalog (own override, else
+    // the global one), so a purpose can draw its model from a different provider
+    // than the one carrying the baseUrl/credential.
+    const globalFacts = source === 'llm-provider' ? resolveProviderFacts(providerName) : { models: [] }
+    if (source === 'llm-provider' && globalFacts.baseUrl === undefined) {
       fail(`config apiSource is llm-provider but provider ${JSON.stringify(providerName)} has no baseURL in the llm-pi-ai settings section`)
     }
     const imageUser = u.image ?? {}
     const videoUser = u.video ?? {}
     const visionUser = u.vision ?? {}
+    const resolvePurpose = (purpose, userSection) => resolveFactsForPurpose(
+      providerName, purpose,
+      stringOrEmpty(userSection.provider, `${purpose}.provider`),
+      stringOrEmpty(userSection.model, `${purpose}.model`),
+    )
+    const imageFacts = source === 'llm-provider' ? resolvePurpose('image', imageUser) : { model: imageUser.model || FLAVOR_MODELS[u.apiFlavor ?? schemaEntry.apiFlavor]?.image }
+    const videoFacts = source === 'llm-provider' ? resolvePurpose('video', videoUser) : { model: videoUser.model || FLAVOR_MODELS[u.apiFlavor ?? schemaEntry.apiFlavor]?.video }
+    const visionFacts = source === 'llm-provider' ? resolvePurpose('vision', visionUser) : { model: visionUser.model || VISION_MODEL_DEFAULT }
     const next = normalizeConfig({
       ...schemaEntry,
       ...u,
-      ...(u.baseUrl === undefined && facts.baseUrl !== undefined ? { baseUrl: facts.baseUrl } : {}),
+      ...(u.baseUrl === undefined && globalFacts.baseUrl !== undefined ? { baseUrl: globalFacts.baseUrl } : {}),
       image: {
         ...schemaEntry.image,
         ...imageUser,
-        ...(facts.imageModel !== undefined && !imageUser.model ? { model: facts.imageModel } : {}),
+        ...(imageFacts.model ? { model: imageFacts.model } : {}),
       },
       video: {
         ...schemaEntry.video,
         ...videoUser,
-        ...(facts.videoModel !== undefined && !videoUser.model ? { model: facts.videoModel } : {}),
+        ...(videoFacts.model ? { model: videoFacts.model } : {}),
       },
       vision: {
         ...schemaEntry.vision,
         ...visionUser,
-        ...(facts.visionModel !== undefined && !visionUser.model ? { model: facts.visionModel } : {}),
+        ...(visionFacts.model ? { model: visionFacts.model } : {}),
       },
-      ...(u.apiKey === undefined && facts.apiKeyEnv !== undefined
+      ...(u.apiKey === undefined && globalFacts.apiKeyEnv !== undefined
         ? {
 
-          apiKeyEnv: facts.apiKeyEnv,
+          apiKeyEnv: globalFacts.apiKeyEnv,
           resolveApiKey: async () => {
-            const resolved = await credentials?.resolve?.(facts.apiKeyEnv)
+            const resolved = await credentials?.resolve?.(globalFacts.apiKeyEnv)
             if (resolved?.value) return resolved.value
             // Fallback: the managed credentials document, same as resolveEnvKey.
-            return resolveEnvKey(facts.apiKeyEnv) || undefined
+            return resolveEnvKey(globalFacts.apiKeyEnv) || undefined
           },
         }
         : {}),

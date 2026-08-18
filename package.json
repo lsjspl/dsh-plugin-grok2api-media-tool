@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-grok2api-media-tool",
-  "version": "0.7.7",
+  "version": "0.8.0",
   "description": "dsh bundle plugin: grok2api image & video generation tools plus image recognition (generate_image / generate_video / recognize_image) for the DeepSeek Harness",
   "repository": {
     "type": "git",
