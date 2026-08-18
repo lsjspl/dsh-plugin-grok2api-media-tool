@@ -71,10 +71,6 @@ grok2api-media-tool:
 
 > 说明：dsh rc.7+ 在设置页开放了插件命名空间，本插件提供**图形化配置表单**（设置 → Plugins → 配置 → Grok2API Media Tool）：可选 provider、各用途模型从 provider 的模型目录下拉选择（每用途可单独覆盖 provider），各超时也可调。表单改动保存后即时写入 `settings.yaml`。也可继续使用以上三种方式配置。
 
-## 配置项
-
-> 以下所有字段都可在 dsh 设置页的**图形化表单**里直接配置（设置 → Plugins → 配置 → Grok2API Media Tool，需 dsh rc.7+）：provider 下拉选择、各用途模型从 provider 模型目录下拉、超时数值、功能开关，保存即写入 `settings.yaml`。也可手工编辑下表字段。
-
 未填写的字段使用默认值。
 
 | 键 | 默认值 | 说明 |
