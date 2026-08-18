@@ -138,7 +138,7 @@
        * through the llm RPCs. Owns its own staged form and revision fencing.
        */
       function Grok2ApiCard(props) {
-        const { scope, connection } = props
+        const { scope, connection, llmPiAiScope } = props
         const snap = React.useSyncExternalStore(
           (cb) => scope.subscribe(cb),
           () => scope.getSnapshot()
@@ -146,6 +146,17 @@
         const value = (snap && snap.status === 'ready' && snap.value) || {}
         const userLayer = (snap && snap.user && typeof snap.user === 'object' ? snap.user : {})
         const writable = snap ? snap.writable : false
+        // The llm-pi-ai namespace carries each provider's `models` array as
+        // the user entered it on the Models page. A provider hand-configured
+        // there lists its models here directly — no endpoint probe, so it works
+        // for providers whose /v1/models is unreachable or unanswered.
+        const piAiSnap = llmPiAiScope
+          ? React.useSyncExternalStore(
+              (cb) => llmPiAiScope.subscribe(cb),
+              () => llmPiAiScope.getSnapshot()
+            )
+          : { status: 'unavailable', value: undefined }
+        const piAiProviders = (piAiSnap && piAiSnap.status === 'ready' && piAiSnap.value && piAiSnap.value.providers) || {}
 
         // Draft edits keyed by flat field path: 'baseUrl', 'image.model', ...
         const [draft, setDraft] = React.useState({})
@@ -186,31 +197,41 @@
           return globalProvider
         }
 
-        // Discover models for a purpose's resolved provider whenever it changes.
+        // Pull each purpose's model list from the provider's `models` array in
+        // the llm-pi-ai namespace (hand-entered on the Models page). This is a
+        // direct config read, not an endpoint probe, so it works for providers
+        // whose /v1/models is unreachable. Falls back to discoverModels RPC
+        // only when the namespace carries no models array for the provider.
         React.useEffect(() => {
-          if (!connection || !connection.api || !connection.api.llm) return
-          if (apiSource !== 'llm-provider') return
           let cancelled = false
-          const next = { ...modelLists }
+          const next = {}
           let pending = 0
           const done = () => { if (!--pending && !cancelled) setModelLists(next) }
           for (const purpose of PURPOSES) {
             const providerName = purposeProvider(purpose)
-            if (!providerName) continue
-            if (modelLists[providerName + ':' + purpose]) { next[purpose] = modelLists[providerName + ':' + purpose]; continue }
-            pending++
-            connection.api.llm.discoverModels({ settingsNs: LLM_PI_AI_NS, provider: providerName }).then((res) => {
-              if (cancelled) return
-              const rows = res && res.result && res.result.ok ? res.result.value.models : []
-              const list = Array.isArray(rows) ? rows : []
-              next[providerName + ':' + purpose] = list
-              next[purpose] = list
-              done()
-            }).catch(() => { if (!cancelled) { next[purpose] = []; done() } })
+            if (!providerName) { next[purpose] = []; continue }
+            const providerCfg = piAiProviders[providerName]
+            const configured = providerCfg && Array.isArray(providerCfg.models)
+              ? providerCfg.models.map((m) => ({ id: typeof m?.id === 'string' ? m.id : '', name: m?.name }))
+                  .filter((m) => m.id)
+              : []
+            if (configured.length) { next[purpose] = configured; continue }
+            // No models array on the provider config: try probing the endpoint.
+            if (connection && connection.api && connection.api.llm && apiSource === 'llm-provider') {
+              pending++
+              connection.api.llm.discoverModels({ settingsNs: LLM_PI_AI_NS, provider: providerName }).then((res) => {
+                if (cancelled) return
+                const rows = res && res.result && res.result.ok ? res.result.value.models : []
+                next[purpose] = Array.isArray(rows) ? rows : []
+                done()
+              }).catch(() => { if (!cancelled) { next[purpose] = []; done() } })
+            } else {
+              next[purpose] = []
+            }
           }
           if (!pending) setModelLists(next)
           return () => { cancelled = true }
-        }, [connection, apiSource, globalProvider, draft, overrideProvider])
+        }, [piAiProviders, globalProvider, draft, overrideProvider, apiSource, connection])
 
         // Resolve what a control shows: the staged draft text, else the stored value.
         const displayValue = (fieldPath) => {
@@ -353,12 +374,20 @@
                 modelOverridden ? h('button', { style: STYLE.reset, onClick: () => resetField(`${purpose}.model`), disabled }, '重置') : null,
               ),
             ),
-            h('select', {
-              value: currentVal, disabled, style: STYLE.select,
+            // Model: an input backed by a datalist so the catalog drops down
+            // when discovery returns models, and the user can still type an id
+            // by hand when discovery is empty/fails (some endpoints do not
+            // answer /v1/models, and the browser-side probe may be blocked).
+            h('input', {
+              type: 'text', list: `grok2api-models-${purpose}`,
+              value: modelVal, disabled, style: STYLE.input, placeholder: defaultModel,
               onChange: (e) => edit(`${purpose}.model`, e.target.value),
-            }, selectOptions.map((o) => h('option', { value: o.value }, o.label))),
-            ...(extraFields || []).map((f) => renderField(`${purpose}.${f[0]}`, f[1], f[2], { numeric: true })),
+            }),
+            h('datalist', { id: `grok2api-models-${purpose}` },
+              modelOptions.map((o) => h('option', { value: o.value }, o.label))
+            ),
             hint ? h('p', { style: STYLE.hint }, hint) : null,
+            ...(extraFields || []).map((f) => renderField(`${purpose}.${f[0]}`, f[1], f[2], { numeric: true })),
             // "单独指定 provider" aligns with the fields above (no indent):
             // same head layout (label + badges) then the control below.
             h('div', { style: STYLE.head },
@@ -625,11 +654,15 @@
 
       function apply(ctx) {
         const scope = ctx.settingsScope && ctx.settingsScope.bind({ namespace: SETTINGS_NS })
+        // The provider directory lives in the llm-pi-ai namespace; binding its
+        // scope lets the card read each provider's `models` array directly
+        // (hand-entered models are stored there, not discovered by probing).
+        const llmPiAiScope = ctx.settingsScope && ctx.settingsScope.bind({ namespace: LLM_PI_AI_NS })
         const connection = ctx.connection
         ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
           name: 'settings.plugin.item',
           key: 'grok2api-media-tool',
-        }, (props) => h(Grok2ApiCard, { ...props, scope, connection })))
+        }, (props) => h(Grok2ApiCard, { ...props, scope, connection, llmPiAiScope })))
 
         // A visible image-upload entry in the composer's left tool row. The
         // slot is session-scoped, so the component receives `inputActions` from
