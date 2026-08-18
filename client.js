@@ -174,8 +174,10 @@
         }, [connection])
 
         // The provider whose catalog each purpose draws models from: the
-        // purpose's own override when set, else the global llmProvider.
-        const globalProvider = pick(value, 'llmProvider') || ''
+        // purpose's own override when set, else the global llmProvider. Both
+        // read the draft first so switching the provider in the form (before
+        // save) re-runs model discovery for the newly chosen provider.
+        const globalProvider = draft.llmProvider !== undefined ? draft.llmProvider : (pick(value, 'llmProvider') || '')
         const purposeProvider = (purpose) => {
           if (overrideProvider[purpose]) {
             return draft[`${purpose}.provider`] !== undefined
@@ -312,7 +314,7 @@
         // One purpose (image/video/vision): an enabled toggle, the model field
         // (select when a provider catalog is available, else text), and an
         // optional per-purpose provider override.
-        const renderPurpose = (purpose, label, hint) => {
+        const renderPurpose = (purpose, label, hint, extraFields) => {
           const enabledVal = displayValue(`${purpose}.enabled`)
           const enabledOverridden = isOverridden(`${purpose}.enabled`)
           const modelVal = displayValue(`${purpose}.model`)
@@ -328,15 +330,21 @@
             : [{ value: currentVal, label: currentVal + '（默认）' }, ...modelOptions]
           const disabled = !writable || saving
           return h('div', { style: { ...STYLE.field, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
-            h('div', { style: STYLE.sectionTitle }, label),
-            h('div', { style: STYLE.head },
-              h('span', { style: STYLE.label }, '启用'),
-              h('span', { style: STYLE.badges }, enabledOverridden ? h('span', { style: STYLE.badge }, '已覆盖') : null),
-              h('input', {
-                type: 'checkbox', style: STYLE.checkbox,
-                checked: enabledVal === 'true' || enabledVal === true, disabled,
-                onChange: (e) => edit(`${purpose}.enabled`, e.target.checked ? 'true' : 'false'),
-              }),
+            // Title row carries the enabled toggle on its right (label + badge
+            // + checkbox share one line, so "启用" never stands alone).
+            h('div', { style: { ...STYLE.head, justifyContent: 'space-between' } },
+              h('span', { style: STYLE.sectionTitle }, label),
+              h('span', { style: STYLE.badges },
+                enabledOverridden ? h('span', { style: STYLE.badge }, '已覆盖') : null,
+                h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', cursor: 'pointer' } },
+                  h('input', {
+                    type: 'checkbox', style: STYLE.checkbox,
+                    checked: enabledVal === 'true' || enabledVal === true, disabled,
+                    onChange: (e) => edit(`${purpose}.enabled`, e.target.checked ? 'true' : 'false'),
+                  }),
+                  '启用',
+                ),
+              ),
             ),
             h('div', { style: STYLE.head },
               h('span', { style: STYLE.label }, '模型'),
@@ -349,24 +357,33 @@
               value: currentVal, disabled, style: STYLE.select,
               onChange: (e) => edit(`${purpose}.model`, e.target.value),
             }, selectOptions.map((o) => h('option', { value: o.value }, o.label))),
+            ...(extraFields || []).map((f) => renderField(`${purpose}.${f[0]}`, f[1], f[2], { numeric: true })),
             hint ? h('p', { style: STYLE.hint }, hint) : null,
-            h('div', { style: STYLE.subField },
-              h('div', { style: STYLE.head },
-                h('label', { style: { ...STYLE.label, flex: '0 0 auto', whiteSpace: 'nowrap' } },
-                  h('input', {
-                    type: 'checkbox', style: STYLE.checkbox, checked: hasOverride, disabled,
-                    onChange: (e) => setOverrideProvider((o) => ({ ...o, [purpose]: e.target.checked })),
-                  }),
-                  ' 单独指定 provider',
-                ),
-              ),
-              hasOverride
-                ? renderField(`${purpose}.provider`, 'provider', null, {
-                    type: 'select', allowBlank: true, blankLabel: '（用全局）',
-                    options: providerOptions.map((p) => ({ value: p.provider, label: p.displayName || p.provider })),
-                  })
-                : null,
+            // "单独指定 provider" aligns with the fields above (no indent):
+            // same head layout (label + badges) then the control below.
+            h('div', { style: STYLE.head },
+              h('span', { style: STYLE.label }, '单独指定 provider'),
+              h('span', { style: STYLE.badges }),
+              h('input', {
+                type: 'checkbox', style: STYLE.checkbox, checked: hasOverride, disabled,
+                onChange: (e) => setOverrideProvider((o) => ({ ...o, [purpose]: e.target.checked })),
+              }),
             ),
+            hasOverride
+              ? h('div', { style: STYLE.field },
+                  h('div', { style: STYLE.head },
+                    h('span', { style: STYLE.label }, 'provider'),
+                    h('span', { style: STYLE.badges }),
+                  ),
+                  h('select', {
+                    value: draft[`${purpose}.provider`] !== undefined ? draft[`${purpose}.provider`] : (pick(value, `${purpose}.provider`) || ''),
+                    disabled, style: STYLE.select, onChange: (e) => edit(`${purpose}.provider`, e.target.value),
+                  },
+                    h('option', { value: '' }, '（用全局）'),
+                    ...providerOptions.map((p) => h('option', { value: p.provider }, p.displayName || p.provider)),
+                  ),
+                )
+              : null,
           )
         }
 
@@ -402,11 +419,14 @@
               type: 'select',
               options: FLAVORS.map((f) => ({ value: f, label: f })),
             }),
-            // --- 各用途 ---
-            renderPurpose('image', '图片生成', 'generate_image 使用的模型。'),
-            renderPurpose('video', '视频生成', 'generate_video 使用的模型。'),
-            renderPurpose('vision', '图片识别', 'recognize_image 使用的 Grok 语言模型。'),
-            // --- 全局开关 ---
+            // --- 各用途（含各自超时）---
+            renderPurpose('image', '图片生成', 'generate_image 使用的模型。',
+              [['timeoutMs', '超时 (ms)', 'generate_image 总超时。']]),
+            renderPurpose('video', '视频生成', 'generate_video 使用的模型。',
+              [['timeoutMs', '超时 (ms)', '视频生成+轮询+下载总超时。'], ['pollIntervalMs', '轮询间隔 (ms)', '视频状态轮询间隔。']]),
+            renderPurpose('vision', '图片识别', 'recognize_image 使用的 Grok 语言模型。',
+              [['timeoutMs', '超时 (ms)', 'recognize_image 总超时。']]),
+            // --- 其它（全局开关与路径/超时）---
             h('div', { style: { ...STYLE.field, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
               h('div', { style: STYLE.sectionTitle }, '其它'),
               h('div', { style: STYLE.head },
@@ -429,6 +449,9 @@
                   onChange: (e) => edit('vision.bridgeToText', e.target.checked ? 'true' : 'false'),
                 }),
               ),
+              renderField('saveDir', '保存目录', '工作区下的子目录，须相对路径。'),
+              renderField('requestTimeoutMs', '单次请求超时 (ms)', '单个 HTTP 请求超时。', { numeric: true }),
+              renderField('mediaDownloadTimeoutMs', '下载超时 (ms)', '单个媒体文件下载超时（视频较大）。', { numeric: true }),
             ),
             // --- footer ---
             h('div', { style: STYLE.footer },
