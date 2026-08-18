@@ -197,9 +197,7 @@
       function apply(ctx) {
         ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
           name: 'settings.plugin.item',
-          id: 'grok2api-media-tool',
-          order: 30,
-          label: 'Grok2API Media Tool',
+          key: 'grok2api-media-tool',
         }, Grok2ApiCard))
 
         // A visible image-upload entry in the composer's left tool row. The
