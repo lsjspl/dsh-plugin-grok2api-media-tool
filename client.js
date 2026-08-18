@@ -41,65 +41,94 @@
       const SETTINGS_NS = 'grok2api-media-tool'
       const PURPOSES = ['image', 'video', 'vision']
 
+ // Styles mirror the shipped plugin cards (PluginCard / ValueField CSS in
+      // ui-settings-plugins) so this out-of-tree card reads as one of them: the
+      // --dsw-alias-* tokens, the 12px-radius layered card, the 34px field input,
+      // and the discard/save footer. Inline because the bundle has no CSS module.
       const STYLE = {
+        // --- card (collapsible, like PluginCard) ---
         card: {
-          display: 'flex', flexDirection: 'column', gap: '10px',
-          padding: '16px 18px', border: '1px solid var(--dsw-alias-border, #333)',
-          borderRadius: '10px', maxWidth: '560px',
+          listStyle: 'none',
+          border: '1px solid var(--dsw-alias-border-l2)',
+          borderRadius: '12px',
+          background: 'var(--dsw-alias-bg-layer-3)',
+          maxWidth: '760px',
+          color: 'var(--dsw-alias-label-primary)',
         },
-        title: { margin: 0, fontSize: '15px', fontWeight: 600 },
-        hint: { margin: 0, fontSize: '12px', opacity: 0.75, lineHeight: 1.6 },
-        list: { margin: 0, paddingInlineStart: '18px', fontSize: '12px', opacity: 0.75, lineHeight: 1.8 },
+        cardOpen: {
+          background: 'var(--dsw-alias-bg-layer-2)',
+          borderColor: 'var(--dsw-alias-label-dimmed)',
+        },
+        header: {
+          width: '100%', appearance: 'none', border: 0, background: 'none',
+          font: 'inherit', color: 'inherit', textAlign: 'left', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: '12px',
+          padding: '14px 16px', borderRadius: '12px',
+        },
+        headText: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '4px' },
+        name: { fontSize: '15px', fontWeight: 600, lineHeight: 1.4, color: 'var(--dsw-alias-label-primary)' },
+        description: { fontSize: '13px', lineHeight: 1.5, color: 'var(--dsw-alias-label-tertiary)' },
+        chevron: { flex: 'none', color: 'var(--dsw-alias-label-tertiary)' },
+        pending: {
+          flex: 'none', borderRadius: '999px', padding: '1px 8px',
+          fontSize: '11px', lineHeight: '17px', fontWeight: 500, whiteSpace: 'nowrap',
+          background: 'var(--dsw-alias-bg-module-platform)', color: 'var(--dsw-alias-label-secondary)',
+        },
+        body: { borderTop: '1px solid var(--dsw-alias-border-l2)', margin: '0 16px', paddingBottom: '8px' },
+        // --- field (like ValueField) ---
+        field: { display: 'flex', flexDirection: 'column', gap: '6px', padding: '12px 0' },
+        head: { display: 'flex', alignItems: 'center', gap: '8px' },
+        label: { flex: 1, minWidth: 0, fontSize: '13px', fontWeight: 500, lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)' },
+        badges: { display: 'inline-flex', alignItems: 'center', gap: '8px' },
+        badge: {
+          borderRadius: '999px', padding: '1px 8px', fontSize: '11px', lineHeight: '17px',
+          whiteSpace: 'nowrap', fontWeight: 500,
+          background: 'var(--dsw-alias-bg-module-platform)', color: 'var(--dsw-alias-label-secondary)',
+        },
+        reset: {
+          border: 'none', background: 'none', padding: 0, font: 'inherit',
+          fontSize: '12px', lineHeight: 1.5, color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer',
+        },
+        input: {
+          height: '34px', padding: '0 12px',
+          border: '1px solid var(--dsw-alias-border-l2)', borderRadius: '8px',
+          background: 'var(--dsw-alias-bg-layer-3)', font: 'inherit',
+          fontSize: '13px', lineHeight: 1.5, color: 'var(--dsw-alias-label-primary)',
+        },
+        select: {
+          height: '34px', padding: '0 8px',
+          border: '1px solid var(--dsw-alias-border-l2)', borderRadius: '8px',
+          background: 'var(--dsw-alias-bg-layer-3)', font: 'inherit',
+          fontSize: '13px', color: 'var(--dsw-alias-label-primary)',
+        },
+        checkbox: { width: '16px', height: '16px', margin: 0, cursor: 'pointer' },
+        hint: { margin: 0, fontSize: '12px', lineHeight: 1.5, color: 'var(--dsw-alias-label-tertiary)' },
+        // --- section (a labelled group of fields inside the body) ---
+        sectionTitle: { margin: '12px 0 0', fontSize: '13px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary)' },
+        // --- footer (discard / save, like PluginCard) ---
+        footer: {
+          display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px',
+          padding: '12px 0 4px', borderTop: '1px solid var(--dsw-alias-border-l2)',
+        },
+        failed: { flex: 1, minWidth: 0, margin: 0, fontSize: '12px', lineHeight: 1.5, color: 'var(--dsw-alias-label-error)' },
+        discard: {
+          appearance: 'none', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: '8px',
+          padding: '5px 14px', font: 'inherit', fontSize: '13px', lineHeight: 1.5, cursor: 'pointer',
+          background: 'none', color: 'var(--dsw-alias-label-secondary)',
+        },
+        save: {
+          appearance: 'none', border: '1px solid transparent', borderRadius: '8px',
+          padding: '5px 14px', font: 'inherit', fontSize: '13px', lineHeight: 1.5, cursor: 'pointer',
+          background: 'var(--dsw-alias-label-primary)', color: 'var(--dsw-alias-bg-layer-3)',
+        },
+        disabled: { opacity: 0.4, cursor: 'default' },
+        readOnly: { margin: '12px 0 0', fontSize: '12px', lineHeight: 1.5, color: 'var(--dsw-alias-label-tertiary)' },
         code: {
           fontFamily: 'var(--dsw-font-mono, monospace)', fontSize: '12px',
           padding: '1px 5px', borderRadius: '4px',
-          background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.16))',
+          background: 'var(--dsw-alias-bg-module-platform)',
         },
-        section: {
-          display: 'flex', flexDirection: 'column', gap: '8px',
-          padding: '10px 0', borderTop: '1px solid var(--dsw-alias-border, #333)',
-        },
-        sectionTitle: { margin: 0, fontSize: '13px', fontWeight: 600 },
-        field: { display: 'flex', flexDirection: 'column', gap: '4px' },
-        fieldRow: { display: 'flex', alignItems: 'center', gap: '8px' },
-        label: { fontSize: '12px', fontWeight: 500, minWidth: '90px' },
-        input: {
-          flex: 1, padding: '4px 8px', fontSize: '12px',
-          border: '1px solid var(--dsw-alias-border, #333)', borderRadius: '6px',
-          background: 'var(--dsw-alias-bg-layer-1, transparent)',
-          color: 'var(--dsw-alias-label-primary, inherit)',
-        },
-        select: {
-          flex: 1, padding: '4px 8px', fontSize: '12px',
-          border: '1px solid var(--dsw-alias-border, #333)', borderRadius: '6px',
-          background: 'var(--dsw-alias-bg-layer-1, transparent)',
-          color: 'var(--dsw-alias-label-primary, inherit)',
-        },
-        checkbox: { width: '16px', height: '16px', margin: 0 },
-        badge: {
-          fontSize: '10px', padding: '1px 6px', borderRadius: '8px',
-          background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.2))',
-          color: 'var(--dsw-alias-label-secondary, #999)',
-        },
-        resetBtn: {
-          fontSize: '11px', padding: '2px 8px', border: 'none', borderRadius: '4px',
-          background: 'transparent', color: 'var(--dsw-alias-link, #4ea1ff)',
-          cursor: 'pointer',
-        },
-        actions: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '4px' },
-        btn: {
-          padding: '6px 14px', fontSize: '12px', fontWeight: 600, border: 'none',
-          borderRadius: '6px', cursor: 'pointer',
-        },
-        btnPrimary: {
-          background: 'var(--dsw-alias-accent, #4ea1ff)', color: '#fff',
-        },
-        btnSecondary: {
-          background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.16))',
-          color: 'var(--dsw-alias-label-primary, inherit)',
-        },
-        status: { fontSize: '11px', opacity: 0.75 },
-        overrideRow: { display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '98px' },
+        subField: { display: 'flex', flexDirection: 'column', gap: '6px', padding: '12px 0 0 0', marginLeft: '24px' },
       }
 
       /**
@@ -122,6 +151,7 @@
         const [draft, setDraft] = React.useState({})
         const [saving, setSaving] = React.useState(false)
         const [failed, setFailed] = React.useState(false)
+        const [open, setOpen] = React.useState(false)
         const [providers, setProviders] = React.useState(null)
         // Per-purpose discovered model lists: { image: [{id,name}], video: ..., vision: ... }
         const [modelLists, setModelLists] = React.useState({})
@@ -244,120 +274,130 @@
 
         const providerOptions = Array.isArray(providers) ? providers.filter((p) => p && p.provider) : []
 
+        // One labelled field row, laid out like the shipped ValueField:
+        // label (flex:1) + badges, then the control, then the hint.
         const renderField = (fieldPath, label, hint, opts) => {
           const val = displayValue(fieldPath)
           const overridden = isOverridden(fieldPath)
-          const common = {
-            value: val,
-            onChange: (e) => edit(fieldPath, e.target.value),
-            disabled: !writable || saving,
-            style: STYLE.input,
-          }
+          const disabled = !writable || saving
           let control
           if (opts && opts.type === 'select') {
             control = h('select', {
-              value: val, disabled: !writable || saving, style: STYLE.select,
+              value: val, disabled, style: STYLE.select,
               onChange: (e) => edit(fieldPath, e.target.value),
             },
               ...(opts.allowBlank ? [h('option', { value: '' }, opts.blankLabel || '（用默认）')] : []),
               ...opts.options.map((o) => h('option', { value: o.value }, o.label))
             )
           } else if (opts && opts.type === 'password') {
-            control = h('input', { type: 'password', placeholder: opts.placeholder || '', ...common })
+            control = h('input', { type: 'password', placeholder: opts.placeholder || '', value: val, disabled, style: STYLE.input, onChange: (e) => edit(fieldPath, e.target.value) })
           } else if (opts && opts.type === 'checkbox') {
-            control = h('input', {
-              type: 'checkbox', checked: !!val, disabled: !writable || saving, style: STYLE.checkbox,
-              onChange: (e) => edit(fieldPath, e.target.checked ? 'true' : 'false'),
-            })
+            control = h('input', { type: 'checkbox', checked: !!val, disabled, style: STYLE.checkbox, onChange: (e) => edit(fieldPath, e.target.checked ? 'true' : 'false') })
           } else {
-            control = h('input', { type: opts && opts.numeric ? 'number' : 'text', ...common })
+            control = h('input', { type: opts && opts.numeric ? 'number' : 'text', value: val, disabled, style: STYLE.input, onChange: (e) => edit(fieldPath, e.target.value) })
           }
           return h('div', { style: STYLE.field },
-            h('div', { style: STYLE.fieldRow },
-              h('label', { style: STYLE.label }, label),
-              control,
-              overridden ? h('span', { style: STYLE.badge }, '已覆盖') : null,
-              overridden ? h('button', { style: STYLE.resetBtn, onClick: () => resetField(fieldPath), disabled: !writable || saving }, '重置') : null,
+            h('div', { style: STYLE.head },
+              h('span', { style: STYLE.label }, label),
+              h('span', { style: STYLE.badges },
+                overridden ? h('span', { style: STYLE.badge }, '已覆盖') : null,
+                overridden ? h('button', { style: STYLE.reset, onClick: () => resetField(fieldPath), disabled }, '重置') : null,
+              ),
             ),
+            control,
             hint ? h('p', { style: STYLE.hint }, hint) : null,
           )
         }
 
+        // One purpose (image/video/vision): an enabled toggle, the model field
+        // (select when a provider catalog is available, else text), and an
+        // optional per-purpose provider override.
         const renderPurpose = (purpose, label, hint) => {
           const enabledVal = displayValue(`${purpose}.enabled`)
           const enabledOverridden = isOverridden(`${purpose}.enabled`)
           const modelVal = displayValue(`${purpose}.model`)
           const modelOverridden = isOverridden(`${purpose}.model`)
           const hasOverride = !!overrideProvider[purpose]
-          const providerVal = purposeProvider(purpose)
           const modelOptions = (modelLists[purpose] || []).map((m) => ({ value: m.id, label: m.name || m.id }))
           const defaultModel = purpose === 'vision' ? VISION_DEFAULT : (FLAVOR_DEFAULTS[apiFlavor] || {})[purpose] || ''
-          const optionsWithDefault = modelOptions.length && !modelOptions.some((o) => o.value === modelVal)
-            ? [{ value: modelVal, label: modelVal + '（当前）' }, ...modelOptions] : modelOptions
-          return h('div', { style: STYLE.section },
-            h('h4', { style: STYLE.sectionTitle }, label),
-            h('div', { style: STYLE.fieldRow },
-              h('label', { style: STYLE.label }, '启用'),
+          const optionsWithDefault = modelOptions.length && !modelOptions.some((o) => o.value === (modelVal || defaultModel))
+            ? [{ value: modelVal || defaultModel, label: (modelVal || defaultModel) + '（当前）' }, ...modelOptions] : modelOptions
+          const disabled = !writable || saving
+          return h('div', { style: { ...STYLE.field, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
+            h('div', { style: STYLE.sectionTitle }, label),
+            h('div', { style: STYLE.head },
+              h('span', { style: STYLE.label }, '启用'),
+              h('span', { style: STYLE.badges }, enabledOverridden ? h('span', { style: STYLE.badge }, '已覆盖') : null),
               h('input', {
-                type: 'checkbox', style: STYLE.checkbox, checked: enabledVal === 'true' || enabledVal === true,
-                disabled: !writable || saving,
+                type: 'checkbox', style: STYLE.checkbox,
+                checked: enabledVal === 'true' || enabledVal === true, disabled,
                 onChange: (e) => edit(`${purpose}.enabled`, e.target.checked ? 'true' : 'false'),
               }),
-              enabledOverridden ? h('span', { style: STYLE.badge }, '已覆盖') : null,
             ),
-            h('div', { style: STYLE.field },
-              h('div', { style: STYLE.fieldRow },
-                h('label', { style: STYLE.label }, '模型'),
-                apiSource === 'llm-provider' && modelOptions.length
-                  ? h('select', {
-                      value: modelVal || defaultModel, disabled: !writable || saving, style: STYLE.select,
-                      onChange: (e) => edit(`${purpose}.model`, e.target.value),
-                    }, optionsWithDefault.map((o) => h('option', { value: o.value }, o.label)))
-                  : h('input', {
-                      type: 'text', value: modelVal, disabled: !writable || saving, style: STYLE.input,
-                      placeholder: defaultModel,
-                      onChange: (e) => edit(`${purpose}.model`, e.target.value),
-                    }),
+            h('div', { style: STYLE.head },
+              h('span', { style: STYLE.label }, '模型'),
+              h('span', { style: STYLE.badges },
                 modelOverridden ? h('span', { style: STYLE.badge }, '已覆盖') : null,
-                modelOverridden ? h('button', { style: STYLE.resetBtn, onClick: () => resetField(`${purpose}.model`), disabled: !writable || saving }, '重置') : null,
+                modelOverridden ? h('button', { style: STYLE.reset, onClick: () => resetField(`${purpose}.model`), disabled }, '重置') : null,
               ),
             ),
+            apiSource === 'llm-provider' && modelOptions.length
+              ? h('select', {
+                  value: modelVal || defaultModel, disabled, style: STYLE.select,
+                  onChange: (e) => edit(`${purpose}.model`, e.target.value),
+                }, optionsWithDefault.map((o) => h('option', { value: o.value }, o.label)))
+              : h('input', {
+                  type: 'text', value: modelVal, disabled, style: STYLE.input, placeholder: defaultModel,
+                  onChange: (e) => edit(`${purpose}.model`, e.target.value),
+                }),
+            hint ? h('p', { style: STYLE.hint }, hint) : null,
             apiSource === 'llm-provider'
-              ? h('div', { style: STYLE.overrideRow },
-                  h('label', { style: { ...STYLE.label, minWidth: 'auto' } },
-                    h('input', {
-                      type: 'checkbox', style: STYLE.checkbox, checked: hasOverride,
-                      disabled: !writable || saving,
-                      onChange: (e) => setOverrideProvider((o) => ({ ...o, [purpose]: e.target.checked })),
-                    }),
-                    ' 单独指定 provider',
+              ? h('div', { style: STYLE.subField },
+                  h('div', { style: STYLE.head },
+                    h('label', { style: { ...STYLE.label, flex: '0' } },
+                      h('input', {
+                        type: 'checkbox', style: STYLE.checkbox, checked: hasOverride, disabled,
+                        onChange: (e) => setOverrideProvider((o) => ({ ...o, [purpose]: e.target.checked })),
+                      }),
+                      ' 单独指定 provider',
+                    ),
                   ),
+                  hasOverride
+                    ? renderField(`${purpose}.provider`, 'provider', null, {
+                        type: 'select', allowBlank: true, blankLabel: '（用全局）',
+                        options: providerOptions.map((p) => ({ value: p.provider, label: p.displayName || p.provider })),
+                      })
+                    : null,
                 )
               : null,
-            hasOverride && apiSource === 'llm-provider'
-              ? renderField(`${purpose}.provider`, 'provider', null, {
-                  type: 'select', allowBlank: true, blankLabel: '（用全局）',
-                  options: providerOptions.map((p) => ({ value: p.provider, label: p.displayName || p.provider })),
-                })
-              : null,
-            hint ? h('p', { style: STYLE.hint }, hint) : null,
           )
         }
 
         if (snap && snap.status === 'unavailable') {
-          return h('div', { style: STYLE.card },
-            h('h3', { style: STYLE.title }, 'Grok2API Media Tool'),
-            h('p', { style: STYLE.hint }, '配置命名空间不可用（settings 未挂载或只读模式）。'),
+          return h('li', { style: STYLE.card },
+            h('div', { style: STYLE.header },
+              h('div', { style: STYLE.headText },
+                h('span', { style: STYLE.name }, 'Grok2API Media Tool'),
+                h('span', { style: STYLE.description }, '配置命名空间不可用（settings 未挂载或只读模式）。'),
+              ),
+            ),
           )
         }
 
         const manual = apiSource === 'manual'
-        return h('div', { style: STYLE.card },
-          h('h3', { style: STYLE.title }, 'Grok2API Media Tool'),
-          h('p', { style: STYLE.hint }, '生成图片/视频，并用 Grok 识别图片（generate_image / generate_video / recognize_image）。'),
-          // --- 全局连接区 ---
-          h('div', { style: STYLE.section },
-            h('h4', { style: STYLE.sectionTitle }, '连接配置'),
+        return h('li', { style: { ...STYLE.card, ...(open ? STYLE.cardOpen : {}) } },
+          // Collapsible header: name + description, a pending badge when dirty,
+          // and a chevron that flips when open.
+          h('button', { type: 'button', style: STYLE.header, onClick: () => setOpen((v) => !v) },
+            h('div', { style: STYLE.headText },
+              h('span', { style: STYLE.name }, 'Grok2API Media Tool'),
+              h('span', { style: STYLE.description }, '生成图片/视频，并用 Grok 识别图片（generate_image / generate_video / recognize_image）。'),
+            ),
+            isDirty ? h('span', { style: STYLE.pending }, '待保存') : null,
+            h('span', { style: { ...STYLE.chevron, transform: open ? 'rotate(180deg)' : 'none' } }, '▾'),
+          ),
+          open ? h('div', { style: STYLE.body },
+            // --- 连接配置 ---
             renderField('apiSource', '配置来源', null, {
               type: 'select',
               options: [{ value: 'manual', label: '手动填写' }, { value: 'llm-provider', label: '复用 dsh 模型提供方' }],
@@ -368,63 +408,72 @@
                   options: providerOptions.map((p) => ({ value: p.provider, label: p.displayName || p.provider })),
                 })
               : null,
-            manual ? renderField('baseUrl', '地址', 'grok2api HTTP(S) 地址', { numeric: false }) : null,
+            manual ? renderField('baseUrl', '地址', 'grok2api HTTP(S) 地址') : null,
             manual ? renderField('apiKey', '密钥', '留空清除；非空以 Bearer 发送', { type: 'password', placeholder: '(未设置)' }) : null,
-            manual ? renderField('apiKeyEnv', '密钥环境变量', 'apiKey 为空时从此环境变量读取', {}) : null,
+            manual ? renderField('apiKeyEnv', '密钥环境变量', 'apiKey 为空时从此环境变量读取') : null,
             renderField('apiFlavor', '后端类型', null, {
               type: 'select',
               options: FLAVORS.map((f) => ({ value: f, label: f })),
             }),
-          ),
-          // --- 各用途区 ---
-          renderPurpose('image', '图片生成', 'generate_image 使用的模型。'),
-          renderPurpose('video', '视频生成', 'generate_video 使用的模型。'),
-          renderPurpose('vision', '图片识别', 'recognize_image 使用的 Grok 语言模型。'),
-          // --- 全局开关 ---
-          h('div', { style: STYLE.section },
-            h('div', { style: STYLE.fieldRow },
-              h('label', { style: STYLE.label }, '保存到工作区'),
-              h('input', {
-                type: 'checkbox', style: STYLE.checkbox,
-                checked: displayValue('saveToWorkspace') === 'true' || displayValue('saveToWorkspace') === true,
-                disabled: !writable || saving,
-                onChange: (e) => edit('saveToWorkspace', e.target.checked ? 'true' : 'false'),
-              }),
-              isOverridden('saveToWorkspace') ? h('span', { style: STYLE.badge }, '已覆盖') : null,
+            // --- 各用途 ---
+            renderPurpose('image', '图片生成', 'generate_image 使用的模型。'),
+            renderPurpose('video', '视频生成', 'generate_video 使用的模型。'),
+            renderPurpose('vision', '图片识别', 'recognize_image 使用的 Grok 语言模型。'),
+            // --- 全局开关 ---
+            h('div', { style: { ...STYLE.field, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
+              h('div', { style: STYLE.sectionTitle }, '其它'),
+              h('div', { style: STYLE.head },
+                h('span', { style: STYLE.label }, '保存到工作区'),
+                h('span', { style: STYLE.badges }, isOverridden('saveToWorkspace') ? h('span', { style: STYLE.badge }, '已覆盖') : null),
+                h('input', {
+                  type: 'checkbox', style: STYLE.checkbox,
+                  checked: displayValue('saveToWorkspace') === 'true' || displayValue('saveToWorkspace') === true,
+                  disabled: !writable || saving,
+                  onChange: (e) => edit('saveToWorkspace', e.target.checked ? 'true' : 'false'),
+                }),
+              ),
+              h('div', { style: STYLE.head },
+                h('span', { style: STYLE.label }, '图片转文字桥'),
+                h('span', { style: STYLE.badges }, isOverridden('vision.bridgeToText') ? h('span', { style: STYLE.badge }, '已覆盖') : null),
+                h('input', {
+                  type: 'checkbox', style: STYLE.checkbox,
+                  checked: displayValue('vision.bridgeToText') === 'true' || displayValue('vision.bridgeToText') === true,
+                  disabled: !writable || saving,
+                  onChange: (e) => edit('vision.bridgeToText', e.target.checked ? 'true' : 'false'),
+                }),
+              ),
             ),
-            visionOverrideNote(value, displayValue, isOverridden, 'vision.bridgeToText', edit, writable, saving),
-          ),
-          // --- 操作区 ---
-          h('div', { style: STYLE.actions },
-            h('button', {
-              style: { ...STYLE.btn, ...STYLE.btnPrimary },
-              disabled: !isDirty || saving || !writable,
-              onClick: () => { void save() },
-            }, saving ? '保存中…' : '保存'),
-            h('button', {
-              style: { ...STYLE.btn, ...STYLE.btnSecondary },
-              disabled: (!isDirty && !failed) || saving,
-              onClick: discard,
-            }, '放弃'),
-            failed ? h('span', { style: { ...STYLE.status, color: 'var(--dsw-alias-danger, #e57373)' } }, '保存未生效，请检查输入') : null,
-            saving ? h('span', { style: STYLE.status }, '正在写入 settings.yaml…') : null,
-          ),
-          h('p', { style: STYLE.hint },
-            '或编辑 ',
-            h('code', { style: STYLE.code }, 'settings.yaml'),
-            ' 的 ',
-            h('code', { style: STYLE.code }, 'grok2api-media-tool:'),
-            ' 节点；也可在对话里说「配置 grok2api」。',
-          ),
-          h('p', { style: STYLE.hint },
-            'Github：',
-            h('a', {
-              href: 'https://github.com/lsjspl/dsh-plugin-grok2api-media-tool',
-              target: '_blank',
-              rel: 'noopener noreferrer',
-              style: { color: 'var(--dsw-alias-link, #4ea1ff)' },
-            }, 'dsh-plugin-grok2api-media-tool'),
-          ),
+            // --- footer ---
+            h('div', { style: STYLE.footer },
+              failed ? h('p', { style: STYLE.failed }, '保存未生效，请检查输入') : null,
+              saving ? h('p', { style: STYLE.failed }, '正在写入 settings.yaml…') : null,
+              h('button', {
+                style: { ...STYLE.discard, ...(((!isDirty && !failed) || saving) ? STYLE.disabled : {}) },
+                disabled: (!isDirty && !failed) || saving,
+                onClick: discard,
+              }, '放弃'),
+              h('button', {
+                style: { ...STYLE.save, ...((!isDirty || saving || !writable) ? STYLE.disabled : {}) },
+                disabled: !isDirty || saving || !writable,
+                onClick: () => { void save() },
+              }, saving ? '保存中…' : '保存'),
+            ),
+            h('p', { style: { ...STYLE.hint, marginTop: '8px' } },
+              '或编辑 ',
+              h('code', { style: STYLE.code }, 'settings.yaml'),
+              ' 的 ',
+              h('code', { style: STYLE.code }, 'grok2api-media-tool:'),
+              ' 节点；也可在对话里说「配置 grok2api」。',
+            ),
+            h('p', { style: STYLE.hint },
+              'Github：',
+              h('a', {
+                href: 'https://github.com/lsjspl/dsh-plugin-grok2api-media-tool',
+                target: '_blank', rel: 'noopener noreferrer',
+                style: { color: 'var(--dsw-alias-brand-primary)' },
+              }, 'dsh-plugin-grok2api-media-tool'),
+            ),
+          ) : null,
         )
       }
 
@@ -451,21 +500,6 @@
       function isStored(userLayer, topKey) {
         return !!userLayer && Object.prototype.hasOwnProperty.call(userLayer, topKey)
       }
-      // The vision.bridgeToText checkbox rendered inline (kept out of the
-      // generic purpose loop because it has no model/provider).
-      function visionOverrideNote(value, displayValue, isOverridden, fieldPath, edit, writable, saving) {
-        return h('div', { style: STYLE.fieldRow },
-          h('label', { style: STYLE.label }, '图片转文字桥'),
-          h('input', {
-            type: 'checkbox', style: STYLE.checkbox,
-            checked: displayValue(fieldPath) === 'true' || displayValue(fieldPath) === true,
-            disabled: !writable || saving,
-            onChange: (e) => edit(fieldPath, e.target.checked ? 'true' : 'false'),
-          }),
-          isOverridden(fieldPath) ? h('span', { style: STYLE.badge }, '已覆盖') : null,
-        )
-      }
-
       const UPLOAD_BUTTON_STYLE = {
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         width: '28px', height: '28px', padding: 0, border: 'none', borderRadius: '8px',
