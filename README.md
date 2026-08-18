@@ -9,7 +9,7 @@
 | `generate_image` | 文生图：返回图片 URL，并可将图片保存到当前会话工作区 |
 | `generate_video` | 文生视频：创建异步任务并等待完成，返回视频 URL，并可保存到工作区 |
 | `recognize_image` | 识图：把本地图片、data URL 或图片 URL 发给 Grok 最新语言模型（默认自动选最新，可配置如 `grok-4.6`），返回模型对图片的描述/回答 |
-| 图片路径上传入口 | 聊天输入框左侧的 🖼️ 按钮：选择图片后上传到 dsh 本地，并把返回的本地路径插入输入框，供模型调用 `recognize_image` |
+| 图片路径上传入口 | 聊天输入框左侧的 🖼️ 按钮：选择图片后上传到 dsh 本地，并把返回的本地路径插入输入框，供模型调用 `recognize_image`。**纯文本主模型（如 DeepSeek）也能用**——它收到的是文本路径，再由插件调 Grok 识图，不依赖主模型支持图片附件 |
 | 路径识图 | 模型拿到图片路径后调用 `recognize_image`，由 Grok 最新语言模型进行多模态识别 |
 
 支持两种 grok2api 后端（通过 `apiFlavor` 选择）：
@@ -45,7 +45,17 @@ dsh plugin --profile web add github:lsjspl/dsh-plugin-grok2api-media-tool   # �
 ```yaml
 grok2api-media-tool:
   apiSource: llm-provider
-  llmProvider: grok   # llm-pi-ai.providers 下的键名
+  llmProvider: grok   # llm-pi-ai.providers 下的键名（全局默认 provider）
+```
+
+三个用途（image / video / vision）还可以各自指定不同的 provider，例如识图用另一个 provider 的模型：
+
+```yaml
+grok2api-media-tool:
+  apiSource: llm-provider
+  llmProvider: grok          # 全局默认
+  vision:
+    provider: grok-chat      # 识图改用 grok-chat 的模型，留空则回退到 grok
 ```
 
 ### 方式 3：手工编辑配置文件
@@ -59,7 +69,7 @@ grok2api-media-tool:
   apiFlavor: chenyme
 ```
 
-> 说明：dsh rc.7+ 在设置页开放了插件命名空间，本插件提供图形化配置表单（设置 → Plugins → 配置 → Grok2API Media Tool）：可选 provider 与各用途模型，也支持手动填地址/密钥。也可继续使用以上三种方式配置。
+> 说明：dsh rc.7+ 在设置页开放了插件命名空间，本插件提供**图形化配置表单**（设置 → Plugins → 配置 → Grok2API Media Tool）：可选 provider、各用途模型从 provider 的模型目录下拉选择（每用途可单独覆盖 provider），各超时也可调。表单改动保存后即时写入 `settings.yaml`。也可继续使用以上三种方式配置。
 
 ## 配置项
 
@@ -71,17 +81,20 @@ grok2api-media-tool:
 | `apiKey` | `''` | 客户端密钥；非空时以 `Authorization: Bearer` 发送 |
 | `apiKeyEnv` | `''` | 存放密钥的环境变量名（如 `GROK_API_KEY`）；`apiKey` 为空时使用 |
 | `apiSource` | `manual` | `manual`（使用本节字段）或 `llm-provider`（复用 `llm-pi-ai` 中的提供商） |
-| `llmProvider` | `''` | `apiSource: llm-provider` 时，`llm-pi-ai.providers` 下的键名 |
+| `llmProvider` | `''` | `apiSource: llm-provider` 时，`llm-pi-ai.providers` 下的键名（全局默认 provider） |
 | `apiFlavor` | `chenyme` | `chenyme`（Go 版）或 `aurora`（Python 版） |
 | `image.enabled` | `true` | 是否启用 `generate_image` |
-| `image.model` | `grok-imagine-image-quality` | 默认图片模型；留空使用后端默认 |
+| `image.model` | `grok-imagine-image-quality` | 图片模型；留空时按 `apiFlavor` 取默认，`apiSource: llm-provider` 时从 provider 模型目录派生 |
+| `image.provider` | `''` | 图片用途的 provider 覆盖（`llm-pi-ai.providers` 下的键名）；空则用全局 `llmProvider` |
 | `image.timeoutMs` | `180000` | 图片生成总超时（毫秒） |
 | `video.enabled` | `true` | 是否启用 `generate_video` |
-| `video.model` | `grok-imagine-video` | 默认视频模型；留空使用后端默认 |
+| `video.model` | `grok-imagine-video` | 视频模型；留空时按 `apiFlavor` 取默认，`apiSource: llm-provider` 时从 provider 模型目录派生 |
+| `video.provider` | `''` | 视频用途的 provider 覆盖；空则用全局 `llmProvider` |
 | `video.timeoutMs` | `1200000` | 视频生成总超时（毫秒） |
 | `video.pollIntervalMs` | `5000` | 视频进度轮询间隔（毫秒） |
 | `vision.enabled` | `true` | 是否启用 `recognize_image` |
 | `vision.model` | `latest` | 识图默认模型；`latest` 会查询 grok2api 的 `/v1/models` 自动选最新 Grok 语言模型（同一会话只查一次，失败回退 `grok-4.6`），也可直接填具体模型 id |
+| `vision.provider` | `''` | 识图用途的 provider 覆盖；空则用全局 `llmProvider` |
 | `vision.timeoutMs` | `60000` | 识图单次请求超时（毫秒） |
 | `vision.bridgeToText` | `true` | 是否把聊天上传的图片先用 Grok 转成文字，再交给纯文本主模型（如 DeepSeek） |
 | `saveToWorkspace` | `true` | 是否将生成的媒体下载到会话工作区 |
@@ -107,6 +120,7 @@ grok2api-media-tool:
 - 视频生成耗时较长，工具会等待完成。
 - 生成的媒体通过 dsh 自身的 Web 服务提供给浏览器，支持局域网与 SSH 转发访问；历史会话中的媒体在重启后仍可查看。
 - 保存到工作区的文件不会进入 dsh 的「产物（Produced）」列表，而是以本地路径形式出现在回复中。
+- 纯文本主模型（如 DeepSeek）不支持原生图片附件（dsh 的限制）。要给这类主模型传图，请用聊天框左侧的 🖼️ 按钮（走 `recognize_image` 识图路径），不要直接拖拽/粘贴图片附件。
 
 ## 开发
 
